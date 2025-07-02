@@ -4,9 +4,8 @@ import os
 import pandas as pd
 import numpy as np
 import analysis_utils as au
-from dolfinx import fem
 
-sim_name = 'geballe_no_diamond_read_flux'
+sim_name = 'geballe_no_diamond'
 
 # Load the configuration
 with open(f'cfgs/{sim_name}.yaml', 'r') as f:
@@ -30,7 +29,6 @@ bnd_o_ins_start = mesh_zmax - z_ins_oside
 pside_coupler_z = bnd_p_ins_end + z_coupler/2  # Middle of pside coupler
 oside_coupler_z = bnd_o_ins_start - z_coupler/2  # Middle of oside coupler
 
-
 # Define watcher points at the center of each coupler (r=0 for centerline)
 watcher_points = {
     'pside': (pside_coupler_z, 0.0),  # (z, r) coordinates
@@ -41,11 +39,11 @@ watcher_points = {
 run.run_simulation(
     cfg=cfg,
     mesh_folder=f'meshes/{sim_name}',
-    rebuild_mesh=True,
-    visualize_mesh=False,
+    rebuild_mesh=True,  # Use existing mesh
+    visualize_mesh=True,
     output_folder=f'outputs/{sim_name}',
     watcher_points=watcher_points,
-    write_xdmf=True,  # No XDMF output as requested
+    write_xdmf=False,  
     suppress_print=False
 )
 
@@ -97,7 +95,6 @@ else:
     print(f"\n--- RMSE Analysis ---")
     print(f"O-side RMSE: {oside_rmse:.4f}")
     print("-------------------\n")
-
 
 
 

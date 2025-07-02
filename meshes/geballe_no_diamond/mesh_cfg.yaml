@@ -1,0 +1,106 @@
+boundary_conditions:
+  outer:
+    left:
+      type: dirichlet
+      value: ic_temp
+    right:
+      type: dirichlet
+      value: ic_temp
+    top:
+      type: dirichlet
+      value: ic_temp
+heating:
+  bc:
+    center: 0.0
+    location: inner
+    material: p_coupler
+    type: gaussian
+  file: experimental_data/geballe_heat_data.csv
+  fwhm: 1.32e-05
+  ic_temp: 300.0
+io:
+  mesh_path: meshes/no_diamond
+layout:
+  materials:
+  - p_ins
+  - p_coupler
+  - sample
+  - o_coupler
+  - o_ins
+material_tags:
+  o_coupler: 4
+  o_ins: 5
+  p_coupler: 2
+  p_ins: 1
+  sample: 3
+mats:
+  o_coupler:
+    cv: 130
+    k: 352
+    mesh: 4.0e-08
+    r: 20e-6
+    rho: 26504
+    z: 6.2e-08
+  o_ins:
+    cv: 668
+    k: 10
+    mesh: 5.0e-08
+    r: 20e-6
+    rho: 4131
+    z: 6.3e-06
+  p_coupler:
+    cv: 130
+    k: 352
+    mesh: 2.0e-08
+    r: 20e-6
+    rho: 26504
+    z: 6.2e-08
+  p_ins:
+    cv: 668
+    k: 10
+    mesh: 5.0e-08
+    r: 20e-6
+    rho: 4131
+    z: 3.2e-06
+  sample:
+    cv: 1158
+    k: 3.8
+    mesh: 4.0e-08
+    r: 20e-6
+    rho: 5164
+    z: 4e-06
+output:
+  analysis:
+    calculate_rmse: true
+    enabled: true
+    experimental_data_file: experimental_data/geballe_heat_data.csv
+    plot_temperature_curves: true
+  watcher_points:
+    enabled: true
+    filename: watcher_points.csv
+    points:
+      oside:
+        material: o_coupler
+        position:
+          percentage: 0.5
+          r: 0.0
+      pside:
+        material: p_ins
+        position:
+          percentage: 1.0
+          r: 0.0
+  xdmf:
+    enabled: true
+    filename: output.xdmf
+performance:
+  progress_reporting:
+    enabled: true
+    interval: 10
+  visualize_mesh: true
+solver:
+  direct:
+    factorization: mumps
+  type: direct
+timing:
+  num_steps: 50
+  t_final: 7.5e-06

@@ -14,8 +14,6 @@ import time
 from scipy.spatial import cKDTree
 import sys
 import contextlib
-import ufl
-import dolfinx
 
 @contextlib.contextmanager
 def suppress_output(enabled):
@@ -374,11 +372,7 @@ def run_simulation(cfg, mesh_folder, rebuild_mesh=False, visualize_mesh=False, o
             xdmf.write_function(u_n, 0.0) # write initial 
         # -----------------------------------------------------------------------------
 
-        # -----------------------------------------------------------------------------
-        # Pre-compute mesh node coordinates (needed for both watcher points and axis data)
-        mesh_coords = domain.geometry.x[:, :2]  # (z, r) for every node
-
-        # Watcher point setup ----------------------------------------------------------
+        # Watcher point setup
         watcher_data = None
         watcher_names = None
         watcher_time = None
@@ -393,11 +387,13 @@ def run_simulation(cfg, mesh_folder, rebuild_mesh=False, visualize_mesh=False, o
                 raise ValueError("watcher_points must be a dict or list of dicts")
             watcher_data = {name: [] for name in watcher_names}
             watcher_time = []
-            # Nearest-node mapping for watcher points
+            # Set up point location using nearest node approach
+            mesh_coords = domain.geometry.x[:, :2]  # Get 2D coordinates of all nodes
             tree = cKDTree(mesh_coords)
+            # Pre-compute nearest node indices for all watcher points
             watcher_nodes = []
             for coords in watcher_coords:
-                _, node_idx = tree.query(coords)
+                distance, node_idx = tree.query(coords)
                 watcher_nodes.append(node_idx)
         else:
             watcher_names = []
@@ -405,121 +401,13 @@ def run_simulation(cfg, mesh_folder, rebuild_mesh=False, visualize_mesh=False, o
             watcher_data = {}
             watcher_time = []
 
-        # Radial band nodes (0 < r ≤ 0.1 µm) for radial-gradient CSV --------------------
-        band_width = 0.1e-6  # 0.1 micrometre in metres
-        band_mask = (mesh_coords[:, 1] > 0.0) & (mesh_coords[:, 1] <= band_width)
-        band_nodes = np.where(band_mask)[0]
-
-        # --- DEBUG LINE REQUESTED BY USER ---
-        if len(band_nodes) > 0:
-            mean_r = mesh_coords[band_nodes, 1].mean()   # radial coord of those nodes
-            beta = mean_r / band_width
-            print(f"--- Radial Band Analysis ---")
-            print(f"  Number of nodes in band: {len(band_nodes)}")
-            print(f"  Band width (Δr): {band_width:.2e} m")
-            print(f"  Mean radial position of nodes in band: {mean_r:.2e} m")
-            print(f"  β = mean_r / Δr = {beta:.4f}")
-            if beta > 0.95:
-                print(f"  Hypothesis Confirmed: Nodes are clustered near the outer edge (β ≈ 1).")
-            elif beta < 0.55 and beta > 0.45:
-                 print(f"  Hypothesis Disproved: Nodes are uniformly distributed (β ≈ 0.5).")
-            else:
-                print(f"  Result: Node distribution is neither fully clustered nor uniform.")
-            print(f"--------------------------")
-        else:
-            print("--- Radial Band Analysis ---")
-            print("  No nodes found in the specified radial band.")
-            print(f"--------------------------")
-
-
-        # Build mapping z -> node list within the band
-        from collections import defaultdict
-        z_to_nodes = defaultdict(list)
-        for n in band_nodes:
-            z_val = mesh_coords[n, 0]
-            z_to_nodes[z_val].append(n)
-
-        # Keep only z positions that actually have nodes
-        z_band = np.array(sorted(z_to_nodes.keys()))
-        band_node_groups = [z_to_nodes[z] for z in z_band]
-
-        # Containers for gradient over time
-        gradient_rows = []  # one list per timestep (averaged grads per z)
-        gradient_time = []
-        
-        # NEW: Containers for raw gradient over time at r=0 nodes
-        raw_gradient_rows = []  # one list per timestep (raw grads at r=0 nodes)
-        raw_gradient_time = []
-        
-        print('Setting up radial heat flux sampling...')
-        
-        # NEW: Find nodes exactly on r=0 for raw gradient calculation
-        r_tolerance = 1e-12  # Very small tolerance for r=0
-        r_zero_mask = np.abs(mesh_coords[:, 1]) <= r_tolerance
-        r_zero_nodes = np.where(r_zero_mask)[0]
-        
-        # Sort r=0 nodes by z-coordinate for consistent ordering
-        r_zero_z_positions = mesh_coords[r_zero_nodes, 0]
-        sort_indices = np.argsort(r_zero_z_positions)
-        r_zero_nodes = r_zero_nodes[sort_indices]
-        r_zero_z_positions = r_zero_z_positions[sort_indices]
-        
-        print(f"Found {len(r_zero_nodes)} nodes exactly on r=0 axis")
-        print(f"r=0 nodes z-range: [{r_zero_z_positions.min():.6e}, {r_zero_z_positions.max():.6e}]")
-        
-        # Setup computation of radial heat flux (existing method for smoothing)
-        V_vec = fem.functionspace(domain, ('Lagrange', 1, (2,)))
-
-        g = ufl.TrialFunction(V_vec)
-        w = ufl.TestFunction(V_vec)
-
-        x         = ufl.SpatialCoordinate(domain)
-        r_coord   = x[1]
-
-        a_proj_ufl = ufl.inner(g, w) * r_coord * ufl.dx          # weighted mass matrix
-        a_proj     = fem.form(a_proj_ufl)                        # wrap!
-        A_proj     = assemble_matrix(a_proj)
-        A_proj.assemble()
-
-        solver_proj = PETSc.KSP().create(A_proj.getComm())
-        solver_proj.setOperators(A_proj)
-        solver_proj.setType(PETSc.KSP.Type.PREONLY)
-        pc_proj = solver_proj.getPC()
-        pc_proj.setType(PETSc.PC.Type.LU)
-        pc_proj.setFactorSolverType("mumps")
-
-        grad_smooth = fem.Function(V_vec, name = 'grad_smooth')
-
-        # ---- once, after mesh_coords is defined ----------------------------
-        dz_bin = 0.2e-6                  
-        z_min, z_max = mesh_coords[:,0].min(), mesh_coords[:,0].max()
-        bin_edges = np.arange(z_min, z_max+dz_bin, dz_bin)
-
-        # For every bin, keep indices of nodes that fall inside AND in the radial band
-        band_mask = (mesh_coords[:,1] > 0.0) & (mesh_coords[:,1] <= 0.25e-6)
-        bin_to_nodes = [[] for _ in range(len(bin_edges)-1)]
-        for n in np.where(band_mask)[0]:
-            z = mesh_coords[n,0]
-            k = np.searchsorted(bin_edges, z) - 1
-            if 0 <= k < len(bin_to_nodes):
-                bin_to_nodes[k].append(n)
-
-        # Keep bins that actually have nodes
-        z_centres  = []
-        node_groups = []
-        for k, nodes in enumerate(bin_to_nodes):
-            if nodes:
-                z_centres.append(0.5*(bin_edges[k]+bin_edges[k+1]))
-                node_groups.append(nodes)
-
-        #  z_centres = np.array([...])   # columns of the CSV
-
         # Time stepping loop -----------------------------------------------------------
         from dolfinx.fem.petsc import assemble_vector, apply_lifting, set_bc
         for x in obj_bcs:
             x.update(0.0)
-        progress_interval = max(1, num_steps // 10)
+        progress_interval = max(1, num_steps // 5)
 
+        
         step_times = []
         loop_start_time = time.time()
 
@@ -539,31 +427,6 @@ def run_simulation(cfg, mesh_folder, rebuild_mesh=False, visualize_mesh=False, o
             set_bc(b, bcs)
             solver.solve(b, u_n.x.petsc_vec)
             u_n.x.scatter_forward()
-
-            # Get smoothed gradient (existing method for band-based averaging)
-            rhs_proj_ufl = ufl.inner(ufl.grad(u_n), w) * r_coord * ufl.dx
-            rhs_proj     = fem.form(rhs_proj_ufl)                    # wrap!
-            b_proj       = create_vector(rhs_proj)
-            assemble_vector(b_proj, rhs_proj)
-
-            solver_proj.solve(b_proj, grad_smooth.x.petsc_vec)
-            grad_smooth.x.scatter_forward()
-
-            # record averaged radial gradient in the band (existing method)
-            grad_arr = grad_smooth.x.array.reshape(-1,2)
-            radial_vals = [float(np.mean(grad_arr[nodes,1])) for nodes in node_groups]
-            gradient_rows.append(radial_vals)
-            gradient_time.append(t)
-
-            # NEW: Get raw gradient at r=0 nodes
-            raw_grad_vals = []
-            for node_idx in r_zero_nodes:
-                # Get the gradient at this specific r=0 node
-                raw_grad_r = grad_arr[node_idx, 1]  # r-component of gradient
-                raw_grad_vals.append(float(raw_grad_r))
-            
-            raw_gradient_rows.append(raw_grad_vals)
-            raw_gradient_time.append(t)
 
             if write_xdmf:
                 xdmf.write_function(u_n, t)
@@ -599,23 +462,6 @@ def run_simulation(cfg, mesh_folder, rebuild_mesh=False, visualize_mesh=False, o
                 df[name] = watcher_data[name]
             df.to_csv(watcher_csv_path, index=False)
 
-        # Write radial gradient CSV only if we have data (existing smoothed method)
-        if gradient_rows:
-            radial_grad_csv_path = os.path.join(save_folder, "radial_gradient.csv")
-            grad_df = pd.DataFrame(gradient_rows, columns=z_centres)
-            grad_df.index = gradient_time
-            grad_df.index.name = 'time'
-            grad_df.to_csv(radial_grad_csv_path)
-
-        # NEW: Write raw radial gradient CSV at r=0 nodes
-        if raw_gradient_rows:
-            raw_radial_grad_csv_path = os.path.join(save_folder, "radial_gradient_raw.csv")
-            raw_grad_df = pd.DataFrame(raw_gradient_rows, columns=r_zero_z_positions)
-            raw_grad_df.index = raw_gradient_time
-            raw_grad_df.index.name = 'time'
-            raw_grad_df.to_csv(raw_radial_grad_csv_path)
-            print(f"Saved raw gradient data at r=0 nodes to {raw_radial_grad_csv_path}")
-
         # Timing outputs before plotting
         program_end_time = time.time()
         total_time = program_end_time - program_start_time
@@ -639,7 +485,7 @@ if __name__ == '__main__':
     parser.add_argument('--rebuild-mesh', action='store_true', help='Rebuild the mesh and update material tags')
     parser.add_argument('--visualize-mesh', action='store_true', help='Visualize the mesh')
     parser.add_argument('--output-folder', type=str, help='Where to save XDMF, watcher CSV, and a copy of the used YAML config')
-    parser.add_argument('--watcher-points', type='dict', help='Points to watch, e.g. {"pside": (z, r),zs ...}')
+    parser.add_argument('--watcher-points', type='dict', help='Points to watch, e.g. {"pside": (z, r), ...}')
     parser.add_argument('--write-xdmf', action='store_true', help='Whether to write XDMF output')
     parser.add_argument('--suppress-print', action='store_true', help='Suppress all print output')
     args = parser.parse_args()
