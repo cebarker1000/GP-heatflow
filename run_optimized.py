@@ -9,7 +9,7 @@ import time
 from typing import Dict, Any
 import pandas as pd
 import numpy as np
-from simulation_engine import OptimizedSimulationEngine
+from simulation_engine import OptimizedSimulationEngine, suppress_output
 import analysis_utils as au
 
 
@@ -95,7 +95,8 @@ def run_simulation(cfg: Dict[str, Any], mesh_folder: str, output_folder: str,
     
     # Plot results if requested
     if plot_results:
-        plot_temperature_curves(cfg, output_folder)
+        with suppress_output(suppress_print):
+            plot_temperature_curves(cfg, output_folder)
     
     return results
 
@@ -257,24 +258,25 @@ Examples:
         mesh_folder = args.mesh_folder
         output_folder = args.output_folder
         
-        print(f"Starting simulation with configuration: {args.config}")
-        print(f"Mesh folder: {mesh_folder}")
-        print(f"Output folder: {output_folder}")
-        
-        # Run simulation
-        results = run_simulation(
-            cfg=cfg,
-            mesh_folder=mesh_folder,
-            output_folder=output_folder,
-            rebuild_mesh=args.rebuild_mesh,
-            visualize_mesh=args.visualize_mesh,
-            suppress_print=args.suppress_print,
-            plot_results=args.plot,
-            config_path=args.config
-        )
-        
-        # Print results
-        if not args.suppress_print:
+        # Use suppress_output context manager for complete silence
+        with suppress_output(args.suppress_print):
+            print(f"Starting simulation with configuration: {args.config}")
+            print(f"Mesh folder: {mesh_folder}")
+            print(f"Output folder: {output_folder}")
+            
+            # Run simulation
+            results = run_simulation(
+                cfg=cfg,
+                mesh_folder=mesh_folder,
+                output_folder=output_folder,
+                rebuild_mesh=args.rebuild_mesh,
+                visualize_mesh=args.visualize_mesh,
+                suppress_print=args.suppress_print,
+                plot_results=args.plot,
+                config_path=args.config
+            )
+            
+            # Print results
             print_timing_summary(results)
             print(f"\nSimulation completed successfully!")
             print(f"Results saved to: {output_folder}")

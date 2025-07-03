@@ -74,7 +74,8 @@ class Mesh:
                     f"{m.name}: invalid rectangle "
                     f"(bx,BX,by,BY) = {m.boundaries} → dx={dx}, dy={dy}"
                 )
-        print('no mesh errors found')
+        # Suppress mesh validation output for batch simulations
+        # print('no mesh errors found')
 
 
     # Mesh Generation ------------------------------------------------------------------------
@@ -179,7 +180,6 @@ class Mesh:
         :func:`gmshio.model_to_mesh`.
         """
         gmsh.initialize()
-        gmsh.option.setNumber("General.Verbosity", 0)
         gmsh.open(filename)
         from dolfinx.io import gmshio
         mesh, cell_tags, facet_tags = gmshio.model_to_mesh(gmsh.model, comm, rank, gdim)

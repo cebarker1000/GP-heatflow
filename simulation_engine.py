@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 import contextlib
+import traceback
 
 from mesh_and_materials.mesh import Mesh, COMM
 from mesh_and_materials.materials import Material
@@ -24,9 +25,28 @@ def suppress_output(enabled: bool):
     if not enabled:
         yield
     else:
-        with open(os.devnull, 'w') as fnull:
-            with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
-                yield
+        try:
+            # Save original file descriptors
+            old_stdout = os.dup(1)
+            old_stderr = os.dup(2)
+            
+            # Redirect to /dev/null
+            with open(os.devnull, 'w') as fnull:
+                os.dup2(fnull.fileno(), 1)
+                os.dup2(fnull.fileno(), 2)
+                try:
+                    yield
+                finally:
+                    # Restore original file descriptors
+                    os.dup2(old_stdout, 1)
+                    os.dup2(old_stderr, 2)
+                    os.close(old_stdout)
+                    os.close(old_stderr)
+        except (OSError, AttributeError):
+            # Fallback for systems where dup2 doesn't work
+            with open(os.devnull, 'w') as fnull:
+                with contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(fnull):
+                    yield
 
 
 class OptimizedSimulationEngine:
@@ -148,7 +168,6 @@ class OptimizedSimulationEngine:
         import gmsh
         
         gmsh.initialize()
-        gmsh.option.setNumber("General.Verbosity", 0)
         mesh_file_path = os.path.join(self.mesh_folder, 'mesh.msh')
         gmsh.open(mesh_file_path)
         domain, cell_tags, facet_tags = gmshio.model_to_mesh(gmsh.model, COMM, 0, 2)
@@ -178,7 +197,7 @@ class OptimizedSimulationEngine:
                 name=name,
                 boundaries=boundaries[name],
                 properties={
-                    "rho_cv": float(mat_cfg['rho']) * float(mat_cfg['cv']),
+                    "rho_cv": float(mat_cfg['rho_cv']),
                     "k": float(mat_cfg['k'])
                 },
                 mesh_size=float(mat_cfg['mesh'])
@@ -275,7 +294,6 @@ class OptimizedSimulationEngine:
         
         # Load mesh
         gmsh.initialize()
-        gmsh.option.setNumber("General.Verbosity", 0)
         mesh_file_path = os.path.join(self.mesh_folder, 'mesh.msh')
         gmsh.open(mesh_file_path)
         domain, cell_tags, facet_tags = gmshio.model_to_mesh(gmsh.model, COMM, 0, 2)
@@ -311,12 +329,8 @@ class OptimizedSimulationEngine:
         V = fem.functionspace(domain, ("Lagrange", 1))
         Q = fem.functionspace(domain, ("DG", 0))
         
-        # Load material tag mapping from mesh configuration (like original code)
-        mesh_cfg_path = os.path.join(self.mesh_folder, 'mesh_cfg.yaml')
-        with open(mesh_cfg_path, 'r') as f:
-            mesh_cfg = yaml.safe_load(f)
-        
-        mat_tag_map = mesh_cfg.get('material_tags', {})
+        # Create material tag mapping from materials object
+        mat_tag_map = {mat.name: getattr(mat, 'tag', i+1) for i, mat in enumerate(materials.values())}
         
         # Efficient material property assignment using actual mesh tags
         tag_to_k = {mat_tag_map[mat.name]: mat.properties["k"] for mat in materials.values()}
@@ -739,6 +753,226 @@ class OptimizedSimulationEngine:
             print("Warning: gmsh not available for mesh visualization")
         except Exception as e:
             print(f"Error visualizing mesh: {e}")
+
+    def run_minimal(self, suppress_print=False):
+        """
+        Run a minimal simulation with no disk I/O, returning only QoIs.
+        
+        Parameters:
+        -----------
+        suppress_print : bool, optional
+            If True, suppress all print output
+        
+        Returns:
+        --------
+        dict
+            Dictionary containing:
+            - 'watcher_data': dict with time series and normalized curves
+            - 'config': the configuration used for the simulation
+            - 'timing': timing information
+        """
+        with suppress_output(suppress_print):
+            try:
+                print("[DEBUG] Starting minimal heat flow simulation...")
+                # Build mesh in memory (no disk I/O)
+                print("[DEBUG] Building mesh in memory...")
+                domain, cell_tags, materials = self._build_mesh_in_memory()
+                print("[DEBUG] Mesh built.")
+                # Setup function spaces and material properties
+                print("[DEBUG] Setting up function spaces...")
+                V, Q, kappa, rho_cv = self._setup_function_spaces(domain, cell_tags, materials)
+                print("[DEBUG] Function spaces set up.")
+                # Load heating data
+                print("[DEBUG] Loading heating data...")
+                heating_data = self._load_heating_data()
+                print("[DEBUG] Heating data loaded.")
+                # Setup boundary conditions
+                print("[DEBUG] Setting up boundary conditions...")
+                obj_bcs, bcs = self._setup_boundary_conditions(V, materials, heating_data)
+                print("[DEBUG] Boundary conditions set up.")
+                # Initialize solution
+                print("[DEBUG] Initializing solution...")
+                u_n = fem.Function(V)
+                ic_temp = float(self.cfg['heating']['ic_temp'])
+                u_n.x.array[:] = np.full_like(u_n.x.array, ic_temp)
+                u_n.x.scatter_forward()
+                u_n.name = 'Temperature (K)'
+                print("[DEBUG] Solution initialized.")
+                # Setup variational forms
+                print("[DEBUG] Setting up variational forms...")
+                lhs_form, rhs_form = self._setup_variational_forms(domain, V, Q, kappa, rho_cv, u_n)
+                print("[DEBUG] Variational forms set up.")
+                # Setup solver
+                print("[DEBUG] Setting up solver...")
+                solver = self._setup_solver(lhs_form, bcs)
+                print("[DEBUG] Solver set up.")
+                # Setup watcher points only (no XDMF)
+                print("[DEBUG] Setting up watcher points...")
+                watcher_setup = self._setup_watcher_points_minimal(domain)
+                print("[DEBUG] Watcher points set up.")
+                # Run time stepping
+                print("[DEBUG] Running time stepping...")
+                timing_results = self._run_time_stepping_minimal(
+                    domain, V, lhs_form, rhs_form, obj_bcs, bcs, solver, u_n, watcher_setup
+                )
+                print("[DEBUG] Time stepping complete.")
+                # Process watcher data to get raw and normalized curves
+                print("[DEBUG] Processing watcher data...")
+                watcher_data = self._process_watcher_data(watcher_setup)
+                print("[DEBUG] Watcher data processed.")
+                return {
+                    'watcher_data': watcher_data,
+                    'config': self.cfg,
+                    'timing': timing_results
+                }
+            except Exception as e:
+                print("[ERROR] Exception in run_minimal:", e)
+                traceback.print_exc()
+                raise
+
+    def _build_mesh_in_memory(self):
+        """Build mesh in memory without saving to disk."""
+        # Create materials from configuration
+        materials = self._create_materials_from_config()
+        
+        # Calculate mesh boundaries
+        mesh_bounds = self._calculate_mesh_boundaries(materials)
+        
+        # Create mesh
+        gmsh_domain = Mesh(
+            name='mesh.msh',
+            boundaries=mesh_bounds,
+            materials=list(materials.values())
+        )
+        
+        # Build mesh in memory (don't save to disk)
+        gmsh_domain.build_mesh()
+        
+        # Convert to DOLFINx directly from memory using the Mesh class method
+        domain, cell_tags, facet_tags = gmsh_domain.to_dolfinx()
+        
+        return domain, cell_tags, materials
+
+    def _setup_watcher_points_minimal(self, domain):
+        """Setup watcher points for minimal run (no file output)."""
+        output_cfg = self.cfg.get('output', {})
+        
+        if not output_cfg.get('watcher_points', {}).get('enabled', True):
+            return None
+        
+        return self._setup_watcher_points(domain, output_cfg['watcher_points'])
+
+    def _run_time_stepping_minimal(self, domain, V, lhs_form, rhs_form, obj_bcs, bcs, solver, 
+                                  u_n, watcher_setup):
+        """Run time stepping for minimal run (no XDMF output)."""
+        t_final = float(self.cfg['timing']['t_final'])
+        num_steps = int(self.cfg['timing']['num_steps'])
+        dt = t_final / num_steps
+        
+        # Initialize vectors
+        from dolfinx.fem.petsc import assemble_vector, apply_lifting, set_bc, create_vector
+        b = create_vector(rhs_form)
+        
+        # Disable progress reporting for minimal runs
+        step_times = []
+        loop_start_time = time.time()
+        
+        # Initialize boundary conditions
+        for bc in obj_bcs:
+            bc.update(0.0)
+        
+        for step in range(num_steps):
+            step_start = time.time()
+            t = (step + 1) * dt
+            
+            # Update boundary conditions
+            for bc in obj_bcs:
+                bc.update(t)
+            
+            # Assemble and solve
+            with b.localForm() as local_b:
+                local_b.set(0)
+            assemble_vector(b, rhs_form)
+            apply_lifting(b, [lhs_form], [bcs])
+            b.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+            set_bc(b, bcs)
+            solver.solve(b, u_n.x.petsc_vec)
+            u_n.x.scatter_forward()
+            
+            # Record watcher point data only
+            if watcher_setup:
+                watcher_setup['time'].append(t)
+                for name, node_idx in zip(watcher_setup['names'], watcher_setup['nodes']):
+                    try:
+                        val = u_n.x.array[node_idx]
+                    except:
+                        val = np.nan
+                    watcher_setup['data'][name].append(val)
+            
+            step_time = time.time() - step_start
+            step_times.append(step_time)
+        
+        # Calculate timing statistics
+        total_loop_time = time.time() - loop_start_time
+        avg_step_time = np.mean(step_times) if step_times else 0.0
+        
+        return {
+            'total_loop_time': total_loop_time,
+            'avg_step_time': avg_step_time,
+            'num_steps': num_steps
+        }
+
+    def _process_watcher_data(self, watcher_setup):
+        """Process watcher data to extract raw and normalized temperature curves."""
+        if not watcher_setup or not watcher_setup['data']:
+            return {}
+        
+        # Convert to numpy arrays
+        time_array = np.array(watcher_setup['time'])
+        watcher_data = {}
+        
+        # First pass: collect raw data and calculate pside normalization factor
+        pside_data = None
+        pside_initial = None
+        pside_max_excursion = None
+        
+        for name in watcher_setup['names']:
+            raw_data = np.array(watcher_setup['data'][name])
+            
+            if name == 'pside':
+                pside_data = raw_data
+                pside_initial = raw_data[0]
+                pside_max_excursion = raw_data.max() - raw_data.min()
+        
+        # Second pass: process all watcher points
+        for name in watcher_setup['names']:
+            raw_data = np.array(watcher_setup['data'][name])
+            initial_temp = raw_data[0]
+            
+            if name == 'oside' and pside_data is not None:
+                # Normalize oside relative to pside
+                if pside_max_excursion > 0:
+                    normalized_data = (raw_data - initial_temp) / pside_max_excursion
+                else:
+                    normalized_data = np.zeros_like(raw_data)
+                max_excursion = pside_max_excursion
+            else:
+                # Normalize other points relative to themselves
+                max_excursion = raw_data.max() - raw_data.min()
+                if max_excursion > 0:
+                    normalized_data = (raw_data - initial_temp) / max_excursion
+                else:
+                    normalized_data = np.zeros_like(raw_data)
+            
+            watcher_data[name] = {
+                'time': time_array,
+                'raw': raw_data,
+                'normalized': normalized_data,
+                'initial_temp': initial_temp,
+                'max_excursion': max_excursion
+            }
+        
+        return watcher_data
 
 
 # Alias for backward compatibility

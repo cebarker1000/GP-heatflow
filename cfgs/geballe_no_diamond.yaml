@@ -6,40 +6,35 @@ mats:
   p_ins:
     r: 20e-6      # radius (m)
     z: 3.2e-06    # thickness (m)
-    rho: 4131     # density (kg/m³)
-    cv: 668       # specific heat (J/kg/K)
+    rho_cv: 2764828  # 4131 * 668
     k: 10         # thermal conductivity (W/m/K)
     mesh: 0.05e-6 # mesh size (m)
   
   p_coupler:
     r: 20e-6
     z: 6.2e-08
-    rho: 26504
-    cv: 130
+    rho_cv: 3445520  # 26504 * 130
     k: 352
     mesh: 0.02e-6
 
   sample:
     r: 20e-6
     z: 1.84e-06
-    rho: 5164
-    cv: 1158
+    rho_cv: 5972312  # 5164 * 1158
     k: 3.8
     mesh: 0.04e-6
   
   o_coupler:
     r: 20e-6
     z: 6.2e-08
-    rho: 26504
-    cv: 130
+    rho_cv: 3445520  # 26504 * 130
     k: 352
     mesh: 0.04e-6
   
   o_ins:
     r: 20e-6
     z: 6.3e-06
-    rho: 4131
-    cv: 668
+    rho_cv: 2764828  # 4131 * 668
     k: 10
     mesh: 0.05e-6
 
