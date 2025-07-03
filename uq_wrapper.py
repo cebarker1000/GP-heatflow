@@ -493,4 +493,117 @@ def load_fpca_model(input_file: str = "outputs/fpca_model.npz") -> Dict[str, Any
     }
     
     print(f"FPCA model loaded from {input_file}")
-    return fpca_model 
+    return fpca_model
+
+
+def recast_training_data_to_fpca(input_file: str = "outputs/uq_batch_results.npz",
+                                fpca_model: Optional[Dict[str, Any]] = None,
+                                fpca_model_file: Optional[str] = None,
+                                output_file: str = "outputs/training_data_fpca.npz") -> Dict[str, Any]:
+    """
+    Recast all training data in terms of FPCA coefficients.
+    
+    Parameters:
+    -----------
+    input_file : str
+        Path to the .npz file containing batch results
+    fpca_model : Dict[str, Any], optional
+        FPCA model (if None, will load from fpca_model_file or build new one)
+    fpca_model_file : str, optional
+        Path to saved FPCA model file
+    output_file : str
+        Output file path for recast data
+        
+    Returns:
+    --------
+    Dict[str, Any]
+        Dictionary containing:
+        - parameters: original parameter values
+        - fpca_scores: FPCA coefficients for each simulation
+        - parameter_names: names of parameters
+        - fpca_model: the FPCA model used
+        - valid_mask: mask indicating which simulations were successful
+    """
+    print(f"Recasting training data to FPCA space...")
+    
+    # Load batch results
+    data = load_batch_results(input_file)
+    
+    # Load or build FPCA model
+    if fpca_model is None:
+        if fpca_model_file is not None:
+            print(f"Loading FPCA model from {fpca_model_file}")
+            fpca_model = load_fpca_model(fpca_model_file)
+        else:
+            print("Building new FPCA model...")
+            fpca_model = build_fpca_model(input_file)
+    
+    # Filter out failed simulations
+    valid_mask = ~np.isnan(data['oside_curves']).any(axis=1)
+    valid_curves = data['oside_curves'][valid_mask]
+    valid_params = data['parameters'][valid_mask]
+    
+    print(f"Processing {len(valid_curves)} valid curves out of {len(data['oside_curves'])}")
+    
+    # Project all curves to FPCA space
+    fpca_scores = []
+    for i, curve in enumerate(valid_curves):
+        scores = project_curve_to_fpca(curve, fpca_model)
+        fpca_scores.append(scores)
+    
+    fpca_scores = np.array(fpca_scores)
+    
+    print(f"FPCA scores shape: {fpca_scores.shape}")
+    print(f"Parameter shape: {valid_params.shape}")
+    
+    # Save recast data
+    np.savez_compressed(
+        output_file,
+        parameters=valid_params,
+        fpca_scores=fpca_scores,
+        parameter_names=data['parameter_names'],
+        valid_mask=valid_mask,
+        n_components=fpca_model['n_components']
+    )
+    
+    print(f"Recast training data saved to {output_file}")
+    
+    return {
+        'parameters': valid_params,
+        'fpca_scores': fpca_scores,
+        'parameter_names': data['parameter_names'],
+        'fpca_model': fpca_model,
+        'valid_mask': valid_mask,
+        'n_components': fpca_model['n_components']
+    }
+
+
+def load_recast_training_data(input_file: str = "outputs/training_data_fpca.npz") -> Dict[str, Any]:
+    """
+    Load recast training data from FPCA space.
+    
+    Parameters:
+    -----------
+    input_file : str
+        Input file path
+    
+    Returns:
+    --------
+    Dict[str, Any]
+        Dictionary containing recast training data
+    """
+    data = np.load(input_file)
+    
+    recast_data = {
+        'parameters': data['parameters'],
+        'fpca_scores': data['fpca_scores'],
+        'parameter_names': data['parameter_names'],
+        'valid_mask': data['valid_mask'],
+        'n_components': int(data['n_components'])
+    }
+    
+    print(f"Recast training data loaded from {input_file}")
+    print(f"Number of samples: {len(recast_data['parameters'])}")
+    print(f"Number of FPCA components: {recast_data['n_components']}")
+    
+    return recast_data 

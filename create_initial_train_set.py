@@ -1,7 +1,9 @@
 import numpy as np
 from UQpy.sampling.stratified_sampling import LatinHypercubeSampling
 from UQpy.distributions.collection import Uniform, Normal
-from uq_wrapper import run_single_simulation, run_batch_simulations, save_batch_results, load_batch_results
+from uq_wrapper import (run_single_simulation, run_batch_simulations, save_batch_results, 
+                       load_batch_results, build_fpca_model, save_fpca_model, 
+                       recast_training_data_to_fpca)
 import matplotlib.pyplot as plt
 import time
 from datetime import datetime, timedelta
@@ -177,5 +179,44 @@ if __name__ == "__main__":
             print(f"  Mean max value: {np.mean(np.max(valid_curves, axis=1)):.3f}")
             print(f"  Mean min value: {np.mean(np.min(valid_curves, axis=1)):.3f}")
             print(f"  Mean range: {np.mean(np.max(valid_curves, axis=1) - np.min(valid_curves, axis=1)):.3f}")
+        
+        # Step 2: Build FPCA model and recast training data
+        print("\n" + "="*60)
+        print("STEP 2: BUILDING FPCA MODEL AND RECASTING DATA")
+        print("="*60)
+        
+        # Build FPCA model
+        print("\nBuilding FPCA model...")
+        fpca_model = build_fpca_model(
+            input_file="outputs/uq_batch_results.npz",
+            min_components=2,
+            variance_threshold=0.99
+        )
+        
+        # Save FPCA model
+        print("\nSaving FPCA model...")
+        save_fpca_model(fpca_model, "outputs/fpca_model.npz")
+        
+        # Recast training data to FPCA space
+        print("\nRecasting training data to FPCA space...")
+        recast_data = recast_training_data_to_fpca(
+            input_file="outputs/uq_batch_results.npz",
+            fpca_model=fpca_model,
+            output_file="outputs/training_data_fpca.npz"
+        )
+        
+        print(f"\nFPCA Analysis Summary:")
+        print(f"  Number of components: {fpca_model['n_components']}")
+        print(f"  Explained variance: {fpca_model['cumulative_variance'][-1]:.4f}")
+        print(f"  Training data shape: {recast_data['parameters'].shape}")
+        print(f"  FPCA scores shape: {recast_data['fpca_scores'].shape}")
+        
+        # Show FPCA score statistics
+        fpca_scores = recast_data['fpca_scores']
+        print(f"\nFPCA Score Statistics:")
+        for i in range(fpca_model['n_components']):
+            scores_i = fpca_scores[:, i]
+            print(f"  PC{i+1}: mean={np.mean(scores_i):.4f}, std={np.std(scores_i):.4f}")
+        
     else:
         print("No successful simulations to save!")
