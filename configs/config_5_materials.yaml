@@ -6,30 +6,41 @@ mats:
   p_ins:
     r: 20e-6      # radius (m)
     z: 3.2e-06    # thickness (m)
-    rho: 4131     # density (kg/m³)
-    cv: 668       # specific heat (J/kg/K)
+    rho_cv: 2764828  # 4131 * 668
     k: 10         # thermal conductivity (W/m/K)
     mesh: 0.05e-6 # mesh size (m)
+  
+  p_coupler:
+    r: 20e-6
+    z: 6.2e-08
+    rho_cv: 3445520  # 26504 * 130
+    k: 352
+    mesh: 0.02e-6
 
   sample:
     r: 20e-6
     z: 1.84e-06
-    rho: 5164
-    cv: 1158
-    k: 3.8
+    rho_cv: 5876632  # 5164 * 1158
+    k: 3.3
+    mesh: 0.04e-6
+  
+  o_coupler:
+    r: 20e-6
+    z: 6.2e-08
+    rho_cv: 3445520  # 26504 * 130
+    k: 352
     mesh: 0.04e-6
   
   o_ins:
     r: 20e-6
     z: 6.3e-06
-    rho: 4131
-    cv: 668
+    rho_cv: 2764828  # 4131 * 668
     k: 10
     mesh: 0.05e-6
 
 # Material layout (agnostic to material names)
 layout:
-  materials: [p_ins, sample, o_ins]
+  materials: [p_ins, p_coupler, sample, o_coupler, o_ins]
 
 # Timing parameters
 timing:
@@ -40,13 +51,13 @@ timing:
 heating:
   ic_temp: 300.0   # initial temperature (K)
   fwhm: 13.2e-06     # full width at half maximum (m)
-  file: "experimental_data/geballe_heat_data.csv"
+  file: "data/experimental/geballe_heat_data.csv"
   
   # Boundary condition configuration
   bc:
     type: "gaussian"
     location: "inner"
-    material: "p_ins"  # Specify which material to apply heating to
+    material: "p_coupler"  # Specify which material to apply heating to
     center: 0.0
 
 # Boundary conditions (agnostic to material names)
@@ -80,31 +91,33 @@ output:
     points:
       pside:
         material: "p_ins"
-        position: "heating_location"  # Automatically place at heating BC location
+        position:
+          r: 0.0      # Specific r-value in meters
+          percentage: 1.0  # Left edge of material (0.0 = leftmost, 1.0 = rightmost)
       
       oside:
-        material: "o_ins"
+        material: "o_coupler"
         position:
           r: 0.0
-          percentage: 0.0
+          percentage: 0.5
   
   # Analysis and plotting options
   analysis:
     enabled: true
     plot_temperature_curves: true
     calculate_rmse: true
-    experimental_data_file: "experimental_data/geballe_heat_data.csv"
+    experimental_data_file: "data/experimental/geballe_heat_data.csv"
 
 # Performance settings
 performance:
   progress_reporting:
     enabled: true
     interval: 10
-  visualize_mesh: false 
+  visualize_mesh: true 
 
 # IO configuration
 io:
-  mesh_path: "meshes/no_diamond_no_ir"
+  mesh_path: "meshes/no_diamond"
 
 # Material tags (for mesh caching)
 material_tags: {}

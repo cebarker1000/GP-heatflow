@@ -1,0 +1,105 @@
+# Heat Flow Simulation Configuration Template
+# This file contains physics model parameters for the heat flow simulation
+
+# Material properties and layout
+mats:
+  # Define each material with its properties
+  material1:
+    r: 20e-6      # radius (m)
+    z: 3.2e-06    # thickness (m)
+    rho: 4131     # density (kg/m³) - OR use rho_cv for combined property
+    cv: 668       # specific heat (J/kg/K) - OR use rho_cv for combined property
+    k: 10         # thermal conductivity (W/m/K)
+    mesh: 0.05e-6 # mesh size (m)
+  
+  material2:
+    r: 20e-6
+    z: 1.84e-06
+    rho: 5164
+    cv: 1158
+    k: 3.8
+    mesh: 0.04e-6
+
+# Material layout (order from left to right)
+layout:
+  materials: [material1, material2]
+
+# Timing parameters
+timing:
+  t_final: 7.5e-6  # final time (s)
+  num_steps: 50    # number of time steps
+
+# Heating configuration
+heating:
+  ic_temp: 300.0   # initial temperature (K)
+  fwhm: 13.2e-06   # full width at half maximum (m)
+  file: "data/experimental/geballe_heat_data.csv"
+  
+  # Boundary condition configuration
+  bc:
+    type: "gaussian"
+    location: "inner"
+    material: "material1"  # Specify which material to apply heating to
+    center: 0.0
+
+# Boundary conditions
+boundary_conditions:
+  outer:
+    left:
+      type: "dirichlet"
+      value: "ic_temp"
+    right:
+      type: "dirichlet" 
+      value: "ic_temp"
+    top:
+      type: "dirichlet"
+      value: "ic_temp"
+
+# Solver configuration
+solver:
+  type: "direct"
+  direct:
+    factorization: "mumps"
+
+# Output configuration
+output:
+  xdmf:
+    enabled: true
+    filename: "output.xdmf"
+  
+  watcher_points:
+    enabled: true
+    filename: "watcher_points.csv"
+    points:
+      pside:
+        material: "material1"  # Material name from mats section
+        position:
+          r: 0.0              # r-coordinate in meters
+          percentage: 1.0     # Position within material (0.0 = leftmost, 1.0 = rightmost)
+      
+      oside:
+        material: "material2"
+        position:
+          r: 0.0
+          percentage: 0.0     # Left edge of the material
+      
+      # Alternative position specifications:
+      # position: "heating_location"  # Automatically place at heating BC location
+      # position: {r: 0.0, percentage: 0.5}  # Middle of material
+
+# Performance settings
+performance:
+  progress_reporting:
+    enabled: true
+    interval: 10
+  visualize_mesh: false
+
+# IO configuration
+io:
+  mesh_path: "meshes/your_mesh_folder"
+
+# Material tags (for mesh caching)
+material_tags: {}
+
+# Note: Runtime options like output folder, mesh folder, visualization,
+# and output suppression are controlled via CLI arguments, not this config file. 

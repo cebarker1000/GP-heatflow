@@ -1,0 +1,42 @@
+Heat Flow Simulation CLI Usage Guide
+====================================
+
+The simulation runner provides a command-line interface for running heat flow simulations
+with various configuration options.
+
+Basic Usage
+----------
+python run_simulation.py --config <config_file> --mesh-folder <mesh_path> --output-folder <output_path>
+
+Required Arguments
+-----------------
+--config <file>          Path to YAML configuration file
+--mesh-folder <path>     Path to the mesh folder
+--output-folder <path>   Path to the output folder
+
+Optional Arguments
+-----------------
+--rebuild-mesh           Rebuild the mesh before simulation
+--visualize-mesh         Visualize the mesh before simulation
+--suppress-output        Suppress all output during simulation
+--plot                   Plot temperature curves at the end of simulation
+
+Examples
+--------
+# Basic simulation
+python run_simulation.py --config configs/config_5_materials.yaml --mesh-folder meshes/geballe_no_diamond --output-folder outputs/geballe_no_diamond
+
+# Rebuild mesh and plot results
+python run_simulation.py --config configs/config_5_materials.yaml --mesh-folder meshes/geballe_no_diamond --output-folder outputs/geballe_no_diamond --rebuild-mesh --plot
+
+# Suppress output and visualize mesh
+python run_simulation.py --config configs/config_5_materials.yaml --mesh-folder meshes/geballe_no_diamond --output-folder outputs/geballe_no_diamond --visualize-mesh --suppress-output
+
+Configuration vs CLI
+-------------------
+Configuration files contain physics model parameters (materials, boundary conditions, etc.)
+CLI arguments control runtime behavior (paths, visualization, output suppression)
+
+Environment Variables
+--------------------
+None currently supported - all paths must be specified via CLI arguments. 
