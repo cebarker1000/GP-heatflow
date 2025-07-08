@@ -116,6 +116,12 @@ def main():
     with open(args.config_file, "r") as f:
         cfg = yaml.safe_load(f)
     params_dict = extract_params_from_config(cfg)
+    
+    # Debug: print parameter values
+    print("\nDEBUG: Parameter values from config file:")
+    for name in param_names:
+        print(f"  {name}: {params_dict[name]}")
+    
     sample_vec = np.array([params_dict[name] for name in param_names])
 
     # ---------------------------------------------------------------------
@@ -141,9 +147,9 @@ def main():
             sim_result['pside_excursion'] = float(pside_entry['max_excursion'])
 
     # ---------------------------------------------------------------------
-    # Surrogate prediction for same parameters
+    # Surrogate prediction for same parameters (including uncertainty)
     # ---------------------------------------------------------------------
-    surrogate_curve, fpca_scores, uncertainties = comparer.get_surrogate_prediction(params_dict)
+    surrogate_curve, fpca_scores, fpca_uncert, curve_uncert = comparer.get_surrogate_prediction(params_dict)
 
     # ---------------------------------------------------------------------
     # Experimental data & plotting
@@ -152,6 +158,7 @@ def main():
     comparer.create_comparison_plot(
         sim_results=sim_result,
         surrogate_curve=surrogate_curve,
+        curve_uncert=curve_uncert,
         exp_time=exp_time,
         exp_temp=exp_temp,
         exp_oside=exp_oside,

@@ -30,28 +30,12 @@ warnings.filterwarnings('ignore')
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
 
-# -----------------------------------------------------------------------------
-#  FullSurrogateModel
-# -----------------------------------------------------------------------------
-
-LOG_PARAM_NAMES = [
-    "d_sample",
-    "rho_cv_sample",
-    "rho_cv_coupler",
-    "rho_cv_ins",
-    "d_coupler",
-    "d_ins_oside",
-    "d_ins_pside",
-]
-
-
 class FullSurrogateModel:
     """
     Full surrogate model that combines FPCA and GP for each component.
     """
     
-    def __init__(self, fpca_model, gps, scaler, y_scalers, parameter_names,
-                 param_ranges, log_indices):
+    def __init__(self, fpca_model, gps, scaler, parameter_names, param_ranges):
         """
         Initialize the surrogate model.
         
@@ -63,26 +47,18 @@ class FullSurrogateModel:
             List of trained GP models (one per FPCA component)
         scaler : StandardScaler
             Fitted scaler for input parameters
-        y_scalers : list
-            List of scalers for output FPCA components
         parameter_names : list
             Names of the parameters
         param_ranges : dict
             Dictionary of parameter ranges for validation
-        log_indices : list
-            Indices of parameters to log-transform
         """
         self.fpca_model = fpca_model
         self.gps = gps
         self.scaler = scaler
-        self.y_scalers = y_scalers
         self.parameter_names = parameter_names
         self.param_ranges = param_ranges
         self.n_components = fpca_model['n_components']
         self.n_parameters = len(parameter_names)
-        
-        # Store additional transformation artefacts
-        self.log_indices = log_indices
         
     def predict_fpca_coefficients(self, X):
         """
@@ -101,24 +77,15 @@ class FullSurrogateModel:
         if X.ndim == 1:
             X = X.reshape(1, -1)
         
-        # Apply log-transform to designated columns, then scale
-        X_transformed = X.copy()
-        for idx in self.log_indices:
-            X_transformed[:, idx] = np.log10(X_transformed[:, idx])
-
-        X_scaled = self.scaler.transform(X_transformed)
+        # Scale inputs
+        X_scaled = self.scaler.transform(X)
         
         # Predict each component
         predictions = []
         uncertainties = []
         
         for i, gp in enumerate(self.gps):
-            pred_scaled, std_scaled = gp.predict(X_scaled, return_std=True)
-
-            # Inverse-transform predictions back to original FPCA coefficient scale
-            pred = self.y_scalers[i].inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
-            std = std_scaled * self.y_scalers[i].scale_[0]  # rescale std
-
+            pred, std = gp.predict(X_scaled, return_std=True)
             predictions.append(pred)
             uncertainties.append(std)
         
@@ -147,7 +114,189 @@ class FullSurrogateModel:
             curve = reconstruct_curve_from_fpca(coeffs, self.fpca_model)
             curves.append(curve)
         
-        return np.array(curves), fpca_coeffs, fpca_uncertainties
+        # Compute curve-level uncertainties
+        curve_uncertainties = self.predict_curve_uncertainty(fpca_uncertainties)
+        
+        return np.array(curves), fpca_coeffs, fpca_uncertainties, curve_uncertainties
+    
+    def predict_curve_uncertainty(self, fpca_uncertainties):
+        """
+        Compute curve-level uncertainty from FPCA coefficient uncertainties.
+        
+        Parameters:
+        -----------
+        fpca_uncertainties : np.ndarray (n_samples, n_components)
+            GP uncertainties for each FPCA component
+            
+        Returns:
+        --------
+        np.ndarray (n_samples, n_timepoints)
+            Curve-level uncertainties at each time point
+        """
+        eigenfunctions = self.fpca_model['eigenfunctions']  # (n_time, n_components)
+        n_time = eigenfunctions.shape[0]
+        
+        curve_uncertainties = []
+        for i in range(fpca_uncertainties.shape[0]):
+            # Diagonal matrix of component variances
+            Σ_coeffs = np.diag(fpca_uncertainties[i]**2)  # (n_comp, n_comp)
+            
+            # Sandwich formula: Φ × Σ_coeffs × Φᵀ
+            Σ_curve = eigenfunctions @ Σ_coeffs @ eigenfunctions.T  # (n_time, n_time)
+            
+            # Extract diagonal (variances) and take square root
+            σ_curve = np.sqrt(np.diag(Σ_curve))  # (n_time,)
+            curve_uncertainties.append(σ_curve)
+        
+        return np.array(curve_uncertainties)
+    
+    def check_fpca_independence(self, test_samples, n_samples=100):
+        """
+        Check for independence between FPCA coefficients by computing correlations.
+        
+        Parameters:
+        -----------
+        test_samples : np.ndarray
+            Parameter samples to test with
+        n_samples : int
+            Number of samples to use for correlation analysis
+            
+        Returns:
+        --------
+        dict
+            Dictionary containing correlation matrices and independence metrics
+        """
+        print(f"\nChecking FPCA coefficient independence with {n_samples} samples...")
+        
+        # Use a subset of test samples if we have more than needed
+        if len(test_samples) > n_samples:
+            indices = np.random.choice(len(test_samples), n_samples, replace=False)
+            samples_subset = test_samples[indices]
+        else:
+            samples_subset = test_samples
+        
+        # Get predictions
+        fpca_coeffs, fpca_uncertainties = self.predict_fpca_coefficients(samples_subset)
+        
+        # Compute correlation matrices
+        coeff_corr = np.corrcoef(fpca_coeffs.T)  # (n_components, n_components)
+        
+        uncertainty_corr = np.corrcoef(fpca_uncertainties.T)  # (n_components, n_components)
+        
+        # Extract off-diagonal elements (these should be close to zero for independence)
+        n_components = fpca_coeffs.shape[1]
+        coeff_off_diag = coeff_corr[np.triu_indices(n_components, k=1)]
+        uncertainty_off_diag = uncertainty_corr[np.triu_indices(n_components, k=1)]
+        
+        # Compute independence metrics
+        coeff_max_corr = np.max(np.abs(coeff_off_diag))
+        coeff_mean_corr = np.mean(np.abs(coeff_off_diag))
+        uncertainty_max_corr = np.max(np.abs(uncertainty_off_diag))
+        uncertainty_mean_corr = np.mean(np.abs(uncertainty_off_diag))
+        
+        # Print results
+        print(f"FPCA Coefficient Independence Check:")
+        print(f"  Coefficient correlations:")
+        print(f"    Max absolute correlation: {coeff_max_corr:.4f}")
+        print(f"    Mean absolute correlation: {coeff_mean_corr:.4f}")
+        print(f"  Uncertainty correlations:")
+        print(f"    Max absolute correlation: {uncertainty_max_corr:.4f}")
+        print(f"    Mean absolute correlation: {uncertainty_mean_corr:.4f}")
+        
+        # Independence assessment
+        independence_threshold = 0.1  # Threshold for "practically independent"
+        coeff_independent = coeff_max_corr < independence_threshold
+        uncertainty_independent = uncertainty_max_corr < independence_threshold
+        
+        print(f"  Independence assessment (threshold: {independence_threshold}):")
+        print(f"    Coefficients independent: {coeff_independent}")
+        print(f"    Uncertainties independent: {uncertainty_independent}")
+        
+        if not coeff_independent:
+            print(f"    WARNING: Strong correlations detected in coefficients!")
+            print(f"    Largest correlation: {coeff_max_corr:.4f}")
+        
+        if not uncertainty_independent:
+            print(f"    WARNING: Strong correlations detected in uncertainties!")
+            print(f"    Largest correlation: {uncertainty_max_corr:.4f}")
+        
+        return {
+            'coeff_correlation_matrix': coeff_corr,
+            'uncertainty_correlation_matrix': uncertainty_corr,
+            'coeff_max_correlation': coeff_max_corr,
+            'coeff_mean_correlation': coeff_mean_corr,
+            'uncertainty_max_correlation': uncertainty_max_corr,
+            'uncertainty_mean_correlation': uncertainty_mean_corr,
+            'coeff_independent': coeff_independent,
+            'uncertainty_independent': uncertainty_independent,
+            'test_samples_used': samples_subset
+        }
+    
+    def check_fpca_orthogonality(self):
+        """
+        Check FPCA orthogonality by re-projecting training data and computing correlations.
+        The correlation matrix should be essentially zero off-diagonal if FPCA is properly centered.
+        """
+        print(f"\nChecking FPCA orthogonality with training data...")
+        
+        # Get training scores from the FPCA model
+        training_scores = self.fpca_model['training_scores']  # (n_samples, n_components)
+        
+        print(f"Training scores shape: {training_scores.shape}")
+        
+        # Compute correlation matrix of training scores
+        training_corr = np.corrcoef(training_scores.T)  # (n_components, n_components)
+        
+        # Extract off-diagonal elements
+        n_components = training_scores.shape[1]
+        off_diag = training_corr[np.triu_indices(n_components, k=1)]
+        
+        # Compute orthogonality metrics
+        max_corr = np.max(np.abs(off_diag))
+        mean_corr = np.mean(np.abs(off_diag))
+        std_corr = np.std(off_diag)
+        
+        # Print results
+        print(f"FPCA Orthogonality Check (Training Data):")
+        print(f"  Correlation matrix shape: {training_corr.shape}")
+        print(f"  Max absolute off-diagonal correlation: {max_corr:.6f}")
+        print(f"  Mean absolute off-diagonal correlation: {mean_corr:.6f}")
+        print(f"  Std of off-diagonal correlations: {std_corr:.6f}")
+        
+        # Orthogonality assessment
+        orthogonality_threshold = 1e-6  # Very strict threshold for numerical orthogonality
+        is_orthogonal = max_corr < orthogonality_threshold
+        
+        print(f"  Orthogonality assessment (threshold: {orthogonality_threshold}):")
+        print(f"    FPCA scores orthogonal: {is_orthogonal}")
+        
+        if not is_orthogonal:
+            print(f"    WARNING: FPCA scores are NOT orthogonal!")
+            print(f"    Largest off-diagonal correlation: {max_corr:.6f}")
+            print(f"    This suggests a problem with centering or eigenfunction computation")
+            
+            # Show the full correlation matrix for debugging
+            print(f"  Full correlation matrix:")
+            for i in range(n_components):
+                row_str = "  ".join([f"{training_corr[i,j]:8.3e}" for j in range(n_components)])
+                print(f"    PC{i+1}: {row_str}")
+        else:
+            print(f"    SUCCESS: FPCA scores are properly orthogonal")
+        
+        # Check if diagonal elements are close to 1.0 (as expected for correlation matrix)
+        diag_elements = np.diag(training_corr)
+        diag_deviation = np.max(np.abs(diag_elements - 1.0))
+        print(f"  Diagonal elements deviation from 1.0: {diag_deviation:.6f}")
+        
+        return {
+            'correlation_matrix': training_corr,
+            'max_off_diagonal_correlation': max_corr,
+            'mean_off_diagonal_correlation': mean_corr,
+            'std_off_diagonal_correlation': std_corr,
+            'is_orthogonal': is_orthogonal,
+            'diagonal_deviation': diag_deviation,
+            'training_scores': training_scores
+        }
     
     def validate_parameters(self, X):
         """
@@ -184,10 +333,8 @@ class FullSurrogateModel:
             'fpca_model': self.fpca_model,
             'gps': self.gps,
             'scaler': self.scaler,
-            'y_scalers': self.y_scalers,
             'parameter_names': self.parameter_names,
             'param_ranges': self.param_ranges,
-            'log_indices': self.log_indices,
             'n_components': self.n_components,
             'n_parameters': self.n_parameters
         }
@@ -219,10 +366,8 @@ class FullSurrogateModel:
             fpca_model=model_data['fpca_model'],
             gps=model_data['gps'],
             scaler=model_data['scaler'],
-            y_scalers=model_data['y_scalers'],
             parameter_names=model_data['parameter_names'],
-            param_ranges=model_data['param_ranges'],
-            log_indices=model_data['log_indices']
+            param_ranges=model_data['param_ranges']
         )
 
 def get_parameter_ranges():
@@ -249,18 +394,16 @@ def create_gp_model(kernel_type='rbf'):
     Create a Gaussian Process model with specified kernel.
     """
     if kernel_type == 'rbf':
-        kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(length_scale=np.ones(11),
-                                                        length_scale_bounds=(1e-3, 1e3)) \
-                 + WhiteKernel(noise_level=1e-5, noise_level_bounds=(1e-8, 1e0))
+        kernel = ConstantKernel(1.0) * RBF(length_scale=np.ones(11)) + WhiteKernel(noise_level=1e-6)
     elif kernel_type == 'matern':
-        kernel = ConstantKernel(1.0) * Matern(length_scale=np.ones(11), nu=1.5)
+        kernel = ConstantKernel(1.0) * Matern(length_scale=np.ones(11), nu=1.5) + WhiteKernel(noise_level=1e-6)
     else:
         raise ValueError(f"Unknown kernel type: {kernel_type}")
     
     gp = GaussianProcessRegressor(
         kernel=kernel,
-        alpha=1e-6,  # Small noise for numerical stability
-        n_restarts_optimizer=30,
+        alpha=1e-10,  # Reduced since WhiteKernel handles noise
+        n_restarts_optimizer=10,
         random_state=42
     )
     
@@ -314,67 +457,44 @@ def train_surrogate_model(input_path="outputs/training_data_fpca.npz",
     print("\n2. Loading FPCA model...")
     fpca_model = load_fpca_model(fpca_model_path)
 
-    # ------------------------------------------------------------------
-    # 3. Transform input parameters (log for selected columns) & scale
-    # ------------------------------------------------------------------
-    print("\n3. Transforming & scaling input parameters...")
-
-    # Determine indices for log-transform based on parameter names
-    param_names_list = list(parameter_names)
-    log_indices = [param_names_list.index(name) for name in LOG_PARAM_NAMES if name in param_names_list]
-
-    X_train_tf = X_train.copy()
-    X_test_tf = X_test.copy()
-
-    for idx in log_indices:
-        X_train_tf[:, idx] = np.log10(X_train_tf[:, idx])
-        X_test_tf[:, idx] = np.log10(X_test_tf[:, idx])
-
+    # Scale inputs based on training set only
+    print("\n3. Scaling input parameters...")
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train_tf)
-    X_test_scaled = scaler.transform(X_test_tf)
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
     # Get parameter ranges
     param_ranges = get_parameter_ranges()
 
-    # ------------------------------------------------------------------
-    # 4. Output scaling (per PC) and GP training
-    # ------------------------------------------------------------------
-
+    # Train GP for each FPCA component
+    print("\n4. Training GP models for each FPCA component...")
     gps = []
-    y_scalers = []
     training_metrics = []
     test_metrics = []
+
 
     for i in range(fpca_model['n_components']):
         print(f"\nTraining GP for PC{i+1}...")
         gp = create_gp_model('rbf')
+        gp.fit(X_train_scaled, y_train[:, i])
 
-        # Scale outputs (per component) to zero mean, unit variance
-        y_scaler_i = StandardScaler()
-        y_train_scaled_i = y_scaler_i.fit_transform(y_train[:, i].reshape(-1, 1)).flatten()
-        y_test_scaled_i = y_scaler_i.transform(y_test[:, i].reshape(-1, 1)).flatten()
-
-        gp.fit(X_train_scaled, y_train_scaled_i)
-
-        # Evaluate training performance (inverse-transform predictions)
-        y_pred_train_scaled, _ = gp.predict(X_train_scaled, return_std=True)
-        y_pred_train = y_scaler_i.inverse_transform(y_pred_train_scaled.reshape(-1, 1)).flatten()
+        # Evaluate training performance
+        y_pred_train, _ = gp.predict(X_train_scaled, return_std=True)
         train_r2 = r2_score(y_train[:, i], y_pred_train)
         train_rmse = np.sqrt(mean_squared_error(y_train[:, i], y_pred_train))
 
-        # Evaluate test performance
-        y_pred_test_scaled, _ = gp.predict(X_test_scaled, return_std=True)
-        y_pred_test = y_scaler_i.inverse_transform(y_pred_test_scaled.reshape(-1, 1)).flatten()
+        # Evaluate test performance and capture predictive std-devs
+        y_pred_test, y_std_test = gp.predict(X_test_scaled, return_std=True)
         test_r2 = r2_score(y_test[:, i], y_pred_test)
         test_rmse = np.sqrt(mean_squared_error(y_test[:, i], y_pred_test))
+
+
 
         print(f"  Training R²: {train_r2:.6f} | RMSE: {train_rmse:.6f}")
         print(f"  Test     R²: {test_r2:.6f} | RMSE: {test_rmse:.6f}")
         print(f"  Optimized kernel: {gp.kernel_}")
 
         gps.append(gp)
-        y_scalers.append(y_scaler_i)
         training_metrics.append({'r2': train_r2, 'rmse': train_rmse, 'kernel': gp.kernel_})
         test_metrics.append({'r2': test_r2, 'rmse': test_rmse})
 
@@ -384,10 +504,8 @@ def train_surrogate_model(input_path="outputs/training_data_fpca.npz",
         fpca_model=fpca_model,
         gps=gps,
         scaler=scaler,
-        y_scalers=y_scalers,
         parameter_names=parameter_names,
-        param_ranges=param_ranges,
-        log_indices=log_indices
+        param_ranges=param_ranges
     )
 
     # Save the model
@@ -406,6 +524,8 @@ def train_surrogate_model(input_path="outputs/training_data_fpca.npz",
     for i, (tr, te) in enumerate(zip(training_metrics, test_metrics)):
         print(f"  PC{i+1}: Train R²={tr['r2']:.4f}, RMSE={tr['rmse']:.4e} | "
               f"Test R²={te['r2']:.4f}, RMSE={te['rmse']:.4e}")
+
+
 
     return surrogate, training_metrics, test_metrics
 
@@ -459,7 +579,7 @@ def test_surrogate_model(surrogate, test_samples):
     
     # Predict full temperature curves
     print("\n3. Predicting temperature curves...")
-    curves, coeffs, uncertainties = surrogate.predict_temperature_curves(test_samples)
+    curves, coeffs, uncertainties, curve_uncertainties = surrogate.predict_temperature_curves(test_samples)
     
     print(f"Predicted curves shape: {curves.shape}")
     
@@ -483,11 +603,39 @@ def test_surrogate_model(surrogate, test_samples):
     print(f"  Min temperature: mean={np.mean(curve_min):.4f}, std={np.std(curve_min):.4f}")
     print(f"  Temperature range: mean={np.mean(curve_range):.4f}, std={np.std(curve_range):.4f}")
     
+    # Curve uncertainty statistics
+    print(f"\nCurve Uncertainty Statistics:")
+    print(f"  Curve uncertainties shape: {curve_uncertainties.shape}")
+    mean_curve_uncertainty = np.mean(curve_uncertainties, axis=0)  # Average across samples
+    max_curve_uncertainty = np.max(curve_uncertainties, axis=0)    # Max across samples
+    min_curve_uncertainty = np.min(curve_uncertainties, axis=0)    # Min across samples
+    
+    print(f"  Mean uncertainty across time: {np.mean(mean_curve_uncertainty):.6f}")
+    print(f"  Max uncertainty across time: {np.max(max_curve_uncertainty):.6f}")
+    print(f"  Min uncertainty across time: {np.min(min_curve_uncertainty):.6f}")
+    print(f"  Uncertainty range (max-min): {np.max(max_curve_uncertainty) - np.min(min_curve_uncertainty):.6f}")
+    
+    # Compare with FPCA coefficient uncertainties
+    print(f"\nFPCA vs Curve Uncertainty Comparison:")
+    mean_fpca_uncertainty = np.mean(fpca_uncertainties, axis=0)  # Average across samples
+    print(f"  Mean FPCA uncertainties: {mean_fpca_uncertainty}")
+    print(f"  Mean curve uncertainty: {np.mean(mean_curve_uncertainty):.6f}")
+    print(f"  Ratio (curve/fpca avg): {np.mean(mean_curve_uncertainty) / np.mean(mean_fpca_uncertainty):.3f}")
+    
+    # Check FPCA coefficient independence
+    independence_results = surrogate.check_fpca_independence(test_samples, n_samples=min(100, len(test_samples)))
+    
+    # Check FPCA orthogonality with training data
+    orthogonality_results = surrogate.check_fpca_orthogonality()
+    
     return {
         'fpca_coeffs': fpca_coeffs,
         'fpca_uncertainties': fpca_uncertainties,
         'curves': curves,
-        'test_samples': test_samples
+        'test_samples': test_samples,
+        'curve_uncertainties': curve_uncertainties,
+        'independence_results': independence_results,
+        'orthogonality_results': orthogonality_results
     }
 
 def visualize_surrogate_results(surrogate, test_results, output_dir="outputs"):
@@ -565,21 +713,40 @@ def visualize_surrogate_results(surrogate, test_results, output_dir="outputs"):
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
     
-    # Plot 6: Parameter sensitivity (using GP length scales)
-    if hasattr(surrogate.gps[0].kernel_, 'k2') and hasattr(surrogate.gps[0].kernel_.k2, 'length_scale'):
-        length_scales = surrogate.gps[0].kernel_.k2.length_scale
-        sensitivities = 1.0 / length_scales
-        sorted_indices = np.argsort(sensitivities)[::-1]
-        sorted_sensitivities = sensitivities[sorted_indices]
-        sorted_names = [surrogate.parameter_names[i] for i in sorted_indices]
+    # Plot 6: Curve uncertainties over time
+    if 'curve_uncertainties' in test_results:
+        curve_uncertainties = test_results['curve_uncertainties']
+        mean_curve_uncertainty = np.mean(curve_uncertainties, axis=0)
+        std_curve_uncertainty = np.std(curve_uncertainties, axis=0)
         
-        bars = axes[1, 2].bar(range(len(sorted_sensitivities)), sorted_sensitivities)
-        axes[1, 2].set_xlabel('Parameters')
-        axes[1, 2].set_ylabel('Sensitivity (1/length_scale)')
-        axes[1, 2].set_title('Parameter Sensitivity (from GP length scales)')
-        axes[1, 2].set_xticks(range(len(sorted_names)))
-        axes[1, 2].set_xticklabels(sorted_names, rotation=45, ha='right')
+        axes[1, 2].plot(time_points, mean_curve_uncertainty, 'r-', linewidth=2, label='Mean uncertainty')
+        axes[1, 2].fill_between(time_points, 
+                               mean_curve_uncertainty - std_curve_uncertainty,
+                               mean_curve_uncertainty + std_curve_uncertainty,
+                               alpha=0.3, color='red', label='±1σ uncertainty')
+        axes[1, 2].set_xlabel('Time Steps')
+        axes[1, 2].set_ylabel('Curve Uncertainty')
+        axes[1, 2].set_title('Surrogate Uncertainty Over Time')
+        axes[1, 2].legend()
         axes[1, 2].grid(True, alpha=0.3)
+    else:
+        # Fallback to parameter sensitivity if curve uncertainties not available
+        if hasattr(surrogate.gps[0].kernel_, 'k2') and hasattr(surrogate.gps[0].kernel_.k2, 'length_scale'):
+            length_scales = surrogate.gps[0].kernel_.k2.length_scale
+            sensitivities = 1.0 / length_scales
+            sorted_indices = np.argsort(sensitivities)[::-1]
+            sorted_sensitivities = sensitivities[sorted_indices]
+            sorted_names = [surrogate.parameter_names[i] for i in sorted_indices]
+            
+            bars = axes[1, 2].bar(range(len(sorted_sensitivities)), sorted_sensitivities)
+            axes[1, 2].set_xlabel('Parameters')
+            axes[1, 2].set_ylabel('Sensitivity (1/length_scale)')
+            axes[1, 2].set_title('Parameter Sensitivity (from GP length scales)')
+            axes[1, 2].set_xticks(range(len(sorted_names)))
+            axes[1, 2].set_xticklabels(sorted_names, rotation=45, ha='right')
+            axes[1, 2].grid(True, alpha=0.3)
+    
+
     
     plt.tight_layout()
     output_file = os.path.join(output_dir, 'surrogate_model_results.png')
@@ -600,7 +767,7 @@ def main():
     
     # Generate test samples
     param_ranges = get_parameter_ranges()
-    test_samples = generate_test_samples(param_ranges, n_samples=100)
+    test_samples = generate_test_samples(param_ranges, n_samples=200)
     
     # Test the surrogate model
     test_results = test_surrogate_model(surrogate, test_samples)
@@ -625,7 +792,7 @@ if __name__ == "__main__":
     parser.add_argument("--fpca_model_path", type=str, default="outputs/fpca_model.npz", help="Path to FPCA model")
     parser.add_argument("--output_path", type=str, default="outputs/full_surrogate_model.pkl", help="Path to save the surrogate model")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Directory for output files")
-    parser.add_argument("--n_test_samples", type=int, default=100, help="Number of test samples to generate")
+    parser.add_argument("--n_test_samples", type=int, default=200, help="Number of test samples to generate")
     parser.add_argument("--test_fraction", type=float, default=0.2, help="Fraction of data to use for testing")
     parser.add_argument("--random_state", type=int, default=42, help="Random state for train/test split")
     args = parser.parse_args()

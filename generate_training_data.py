@@ -45,7 +45,7 @@ param_defs = [
         "sigma_log": 0.001},
     {"name" : "fwhm",
         "type": "lognormal",
-        "center": 12e-6,
+        "center": 13.2e-6,
         "sigma_log": 0.041},
     {"name" : "k_sample",
         "type": "uniform",

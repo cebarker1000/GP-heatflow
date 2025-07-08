@@ -55,29 +55,97 @@ except Exception as e:
     print("[WARNING] Could not load training parameters for distance diagnostics:", e)
     nn_model = None
 
-# Draw random parameter sets
-low = [param_ranges[name][0] for name in param_names]
-high = [param_ranges[name][1] for name in param_names]
-test_samples = np.random.uniform(low=low, high=high, size=(N_TEST, len(param_names)))
+# Draw random parameter sets from the SAME distributions used for training
+print(f"\nDrawing {N_TEST} test samples from the SAME distributions used for training...")
+
+# Parameter definitions from generate_training_data.py (same as training)
+param_defs = [
+    {"name": "d_sample", 
+        "type": "lognormal", 
+        "center": 1.84e-6, 
+        "sigma_log": 0.079},
+    {"name": "rho_cv_sample", 
+        "type": "lognormal", 
+        "center": 5979912, 
+        "sigma_log": 0.079},
+    {"name": "rho_cv_coupler", 
+        "type": "lognormal", 
+        "center": 3445520, 
+        "sigma_log": 0.079},
+    {"name": "rho_cv_ins", 
+        "type": "lognormal", 
+        "center": 2759508, 
+        "sigma_log": 0.079},
+    {"name": "d_coupler", 
+        "type": "lognormal", 
+        "center": 6.2e-8, 
+        "sigma_log": 0.204},
+    {"name": "d_ins_pside", 
+        "type": "lognormal", 
+        "center": 3.2e-6, 
+        "sigma_log": 0.001},
+    {"name": "d_ins_oside", 
+        "type": "lognormal", 
+        "center": 6.3e-6, 
+        "sigma_log": 0.001},
+    {"name" : "fwhm",
+        "type": "lognormal",
+        "center": 12e-6,
+        "sigma_log": 0.041},
+    {"name" : "k_sample",
+        "type": "uniform",
+        "low": 2.0,
+        "high": 5.0},
+    {"name" : "k_ins",
+        "type": "uniform",
+        "low": 7,
+        "high": 13.0},
+    {"name" : "k_coupler",
+        "type": "uniform",
+        "low": 300,
+        "high": 400},
+]
+
+# Generate samples from the same distributions as training
+test_samples = np.zeros((N_TEST, len(param_names)))
+for i, param_def in enumerate(param_defs):
+    if param_def["type"] == "lognormal":
+        # Generate lognormal samples
+        mu = np.log(param_def["center"])
+        sigma = param_def["sigma_log"]
+        log_samples = np.random.normal(mu, sigma, N_TEST)
+        test_samples[:, i] = np.exp(log_samples)
+    elif param_def["type"] == "uniform":
+        # Generate uniform samples
+        test_samples[:, i] = np.random.uniform(param_def["low"], param_def["high"], N_TEST)
+    else:
+        raise ValueError(f"Unknown parameter type: {param_def['type']}")
+
+print(f"Generated test samples from training distributions:")
+for i, param_def in enumerate(param_defs):
+    samples_for_param = test_samples[:, i]
+    print(f"  {param_def['name']}: mean={np.mean(samples_for_param):.2e}, std={np.std(samples_for_param):.2e}")
+
+# Compare with the old uniform sampling approach
+print(f"\nComparison with old uniform sampling approach:")
+old_low = [param_ranges[name][0] for name in param_names]
+old_high = [param_ranges[name][1] for name in param_names]
+old_uniform_samples = np.random.uniform(low=old_low, high=old_high, size=(N_TEST, len(param_names)))
+
+for i, param_def in enumerate(param_defs):
+    old_samples = old_uniform_samples[:, i]
+    new_samples = test_samples[:, i]
+    print(f"  {param_def['name']}:")
+    print(f"    Training dist: mean={np.mean(new_samples):.2e}, std={np.std(new_samples):.2e}")
+    print(f"    Uniform range: mean={np.mean(old_samples):.2e}, std={np.std(old_samples):.2e}")
+    print(f"    Range overlap: {np.min(new_samples):.2e} to {np.max(new_samples):.2e} vs {old_low[i]:.2e} to {old_high[i]:.2e}")
 
 # Prepare containers for extended diagnostics
 results = []
 diagnostics = []  # list of dicts – one per successful simulation
 
-# Default param_defs and param_mapping (copied from create_initial_train_set.py)
-param_defs = [
-    {"name": "d_sample", "type": "lognormal", "center": 1.84e-6, "sigma_log": 0.079},
-    {"name": "rho_cv_sample", "type": "lognormal", "center": 2764828, "sigma_log": 0.079},
-    {"name": "rho_cv_coupler", "type": "lognormal", "center": 3445520, "sigma_log": 0.079},
-    {"name": "rho_cv_ins", "type": "lognormal", "center": 2764828, "sigma_log": 0.079},
-    {"name": "d_coupler", "type": "lognormal", "center": 6.2e-8, "sigma_log": 0.204},
-    {"name": "d_ins_oside", "type": "lognormal", "center": 3.2e-6, "sigma_log": 0.001},
-    {"name": "d_ins_pside", "type": "lognormal", "center": 6.3e-6, "sigma_log": 0.001},
-    {"name": "fwhm", "type": "lognormal", "center": 12e-6, "sigma_log": 0.041},
-    {"name": "k_sample", "type": "uniform", "low": 2.8, "high": 4.8},
-    {"name": "k_ins", "type": "uniform", "low": 7, "high": 13.0},
-    {"name": "k_coupler", "type": "uniform", "low": 300, "high": 400},
-]
+# Use the same param_defs as above (from generate_training_data.py)
+# param_defs is already defined above with the correct training distributions
 param_mapping = {
     "d_sample": [("mats", "sample", "z")],
     "rho_cv_sample": [("mats", "sample", "rho_cv")],
@@ -94,8 +162,9 @@ param_mapping = {
 
 for i, params in enumerate(test_samples):
     print(f"\nTest {i+1}/{N_TEST}")
+    print(params)
     # Surrogate prediction
-    surrogate_curve, surrogate_coeffs, _ = surrogate.predict_temperature_curves(params)
+    surrogate_curve, surrogate_coeffs, _, _ = surrogate.predict_temperature_curves(params)
     surrogate_curve = surrogate_curve[0]  # shape (n_timepoints,)
     surrogate_coeffs = surrogate_coeffs[0]
 
@@ -228,5 +297,26 @@ if diagnostics:
         plt.close()
         print(f"Saved scatter plot {fname}")
 
+
+# Summary of validation results
+if diagnostics:
+    diag_df = pd.DataFrame(diagnostics)
+    
+    print(f"\n{'='*60}")
+    print("VALIDATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"Total test samples: {len(diagnostics)}")
+    print(f"Mean total curve RMSE: {np.mean(diag_df['rmse_total']):.6f}")
+    print(f"Mean GP curve RMSE: {np.mean(diag_df['rmse_gp_curve']):.6f}")
+    print(f"Mean FPCA truncation RMSE: {np.mean(diag_df['rmse_fpca_trunc']):.6f}")
+    print(f"Mean coefficient L2 error: {np.mean(diag_df['coeff_err_l2']):.6f}")
+    
+    if diag_df["nearest_dist"].notna().any():
+        print(f"Mean distance to nearest training point: {np.mean(diag_df['nearest_dist']):.4f}")
+        print(f"Max distance to nearest training point: {np.max(diag_df['nearest_dist']):.4f}")
+    
+    print(f"\nThis validation used the SAME distributions as training data.")
+    print(f"If the surrogate is working correctly, these results should be much better")
+    print(f"than the previous uniform sampling approach.")
 
 print("\nAll overlays and diagnostics complete. Check the outputs/ directory for results.") 

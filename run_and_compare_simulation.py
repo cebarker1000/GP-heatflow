@@ -68,11 +68,23 @@ class SimulationComparer:
     # Surrogate prediction
     # ------------------------------------------------------------------
     def get_surrogate_prediction(self, params: Dict[str, float]):
-        # Build vector in expected order
+        """Return surrogate outputs including per-time-step uncertainty.
+
+        Returns
+        -------
+        tuple
+            (curve_mean, fpca_coeffs, fpca_uncerts, curve_uncerts) – each as 1-D arrays.
+        """
+        # Build vector in expected order for the surrogate
         default_order = self.surrogate.parameter_names
         vector = np.array([params[name] for name in default_order])
-        curves, coeffs, uncerts = self.surrogate.predict_temperature_curves(vector.reshape(1, -1))
-        return curves[0], coeffs[0], uncerts[0]
+
+        curves, coeffs, fpca_uncerts, curve_uncerts = self.surrogate.predict_temperature_curves(
+            vector.reshape(1, -1)
+        )
+
+        # Flatten batch dimension
+        return curves[0], coeffs[0], fpca_uncerts[0], curve_uncerts[0]
 
     # ------------------------------------------------------------------
     # Experimental data utilities
@@ -90,6 +102,7 @@ class SimulationComparer:
     # Plotting
     # ------------------------------------------------------------------
     def create_comparison_plot(self, *, sim_results: Dict[str, Any], surrogate_curve: np.ndarray,
+                               curve_uncert: np.ndarray | None = None,
                                exp_time: np.ndarray, exp_temp: np.ndarray, exp_oside: np.ndarray,
                                params: Dict[str, float]):
         if "oside_temps" not in sim_results:
@@ -123,6 +136,22 @@ class SimulationComparer:
         plt.legend()
         plt.grid(alpha=0.3)
         plt.tight_layout()
+
+        # --- uncertainty band -------------------------------------------------
+        if curve_uncert is not None:
+            # Shade ±2σ around the surrogate mean
+            upper = norm_surr + 2 * curve_uncert
+            lower = norm_surr - 2 * curve_uncert
+            plt.fill_between(self.sim_time_grid, lower, upper, color="r", alpha=0.2,
+                             label="Surrogate ±2σ")
+
+            # Mark point of maximum σ for quick visual cue
+            idx_max = int(np.argmax(curve_uncert))
+            plt.scatter(self.sim_time_grid[idx_max], norm_surr[idx_max], color="k", zorder=5)
+            plt.text(self.sim_time_grid[idx_max], norm_surr[idx_max],
+                     f"  max σ={curve_uncert[idx_max]:.3f}",
+                     va="bottom", ha="left", fontsize=8)
+
         out = f"outputs/comparison_{os.path.splitext(os.path.basename(self.config_file))[0]}.png"
         plt.savefig(out, dpi=200)
         print(f"Comparison plot saved to {out}\nRMSE Sim={rmse_sim:.4f} | Surrogate={rmse_sur:.4f}")
