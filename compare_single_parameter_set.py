@@ -23,40 +23,14 @@ import numpy as np
 from analysis.uq_wrapper import run_single_simulation, load_recast_training_data
 from train_surrogate_models import FullSurrogateModel
 from run_and_compare_simulation import SimulationComparer  # reuse plotting & helpers
-from analysis.uq_wrapper import run_single_simulation
+from analysis.config_utils import get_param_defs_from_config, get_param_mapping_from_config
 
 
 # -----------------------------------------------------------------------------
-# Parameter definitions and mapping (identical to validate_surrogates.py)
+# Load parameter definitions and mapping from config file
 # -----------------------------------------------------------------------------
-param_defs = [
-    {"name": "d_sample",       "type": "lognormal", "center": 1.84e-6, "sigma_log": 0.079},
-    {"name": "rho_cv_sample",  "type": "lognormal", "center": 2764828, "sigma_log": 0.079},
-    {"name": "rho_cv_coupler", "type": "lognormal", "center": 3445520, "sigma_log": 0.079},
-    {"name": "rho_cv_ins",     "type": "lognormal", "center": 2764828, "sigma_log": 0.079},
-    {"name": "d_coupler",      "type": "lognormal", "center": 6.2e-8,  "sigma_log": 0.204},
-    {"name": "d_ins_oside",    "type": "lognormal", "center": 3.2e-6,  "sigma_log": 0.001},
-    {"name": "d_ins_pside",    "type": "lognormal", "center": 6.3e-6,  "sigma_log": 0.001},
-    {"name": "fwhm",           "type": "lognormal", "center": 12e-6,  "sigma_log": 0.041},
-    {"name": "k_sample",       "type": "uniform",   "low": 2.8, "high": 4.8},
-    {"name": "k_ins",          "type": "uniform",   "low": 7.0, "high": 13.0},
-    {"name": "k_coupler",      "type": "uniform",   "low": 300, "high": 400},
-]
-
-param_mapping = {
-    "d_sample":       [("mats", "sample", "z")],
-    "rho_cv_sample":  [("mats", "sample", "rho_cv")],
-    "rho_cv_coupler": [("mats", "p_coupler", "rho_cv"), ("mats", "o_coupler", "rho_cv")],
-    "rho_cv_ins":     [("mats", "p_ins", "rho_cv"),    ("mats", "o_ins", "rho_cv")],
-    "d_coupler":      [("mats", "p_coupler", "z"),      ("mats", "o_coupler", "z")],
-    "d_ins_oside":    [("mats", "o_ins", "z")],
-    "d_ins_pside":    [("mats", "p_ins", "z")],
-    "fwhm":           [("heating", "fwhm")],
-    "k_sample":       [("mats", "sample", "k")],
-    "k_ins":          [("mats", "p_ins", "k"),         ("mats", "o_ins", "k")],
-    "k_coupler":      [("mats", "p_coupler", "k"),     ("mats", "o_coupler", "k")],
-}
-
+param_defs = get_param_defs_from_config()
+param_mapping = get_param_mapping_from_config()
 param_names = [p["name"] for p in param_defs]
 
 # -----------------------------------------------------------------------------

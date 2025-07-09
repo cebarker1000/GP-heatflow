@@ -48,12 +48,17 @@ from uqpy_surrogate import least_squares
 
 def ls_log_likelihood(params=None, data=None):
     # Use least_squares to compute residuals, then return Gaussian log-likelihood (unit variance)
+    from analysis.config_utils import get_fixed_params_from_config
+    
+    # Get fixed parameters from config file
+    fixed_params = get_fixed_params_from_config()
+    
     residual = least_squares(
         params,
         data_full=data,
         fpca_model=fpca_model,
         surrogate_model=surrogate,
-        PARAMS_FIXED=surrogate.PARAMS_FIXED if hasattr(surrogate, "PARAMS_FIXED") else np.array([1.84e-6, 5.979912e6, 3.445520e6, 2.759508e6, 6.2e-8, 3.2e-6, 6.3e-6, 12e-6])
+        PARAMS_FIXED=fixed_params
     )
     # Flatten residual if needed
     residual = np.asarray(residual).ravel()

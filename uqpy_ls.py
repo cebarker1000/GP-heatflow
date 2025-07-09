@@ -12,22 +12,10 @@ import yaml
 from scipy.optimize import minimize
 from train_surrogate_models import FullSurrogateModel
 from run_and_compare_simulation import SimulationComparer
+from analysis.config_utils import get_param_defs_from_config
 
-# Parameter definitions and mapping (identical to compare_single_parameter_set.py)
-param_defs = [
-    {"name": "d_sample",       "type": "lognormal", "center": 1.84e-6, "sigma_log": 0.079},
-    {"name": "rho_cv_sample",  "type": "lognormal", "center": 2764828, "sigma_log": 0.079},
-    {"name": "rho_cv_coupler", "type": "lognormal", "center": 3445520, "sigma_log": 0.079},
-    {"name": "rho_cv_ins",     "type": "lognormal", "center": 2764828, "sigma_log": 0.079},
-    {"name": "d_coupler",      "type": "lognormal", "center": 6.2e-8,  "sigma_log": 0.204},
-    {"name": "d_ins_oside",    "type": "lognormal", "center": 3.2e-6,  "sigma_log": 0.001},
-    {"name": "d_ins_pside",    "type": "lognormal", "center": 6.3e-6,  "sigma_log": 0.001},
-    {"name": "fwhm",           "type": "lognormal", "center": 12e-6,  "sigma_log": 0.041},
-    {"name": "k_sample",       "type": "uniform",   "low": 2.8, "high": 4.8},
-    {"name": "k_ins",          "type": "uniform",   "low": 7.0, "high": 13.0},
-    {"name": "k_coupler",      "type": "uniform",   "low": 300, "high": 400},
-]
-
+# Load parameter definitions from config file
+param_defs = get_param_defs_from_config()
 param_names = [p["name"] for p in param_defs]
 
 def extract_params_from_config(cfg):

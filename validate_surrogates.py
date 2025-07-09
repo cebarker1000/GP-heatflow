@@ -58,53 +58,9 @@ except Exception as e:
 # Draw random parameter sets from the SAME distributions used for training
 print(f"\nDrawing {N_TEST} test samples from the SAME distributions used for training...")
 
-# Parameter definitions from generate_training_data.py (same as training)
-param_defs = [
-    {"name": "d_sample", 
-        "type": "lognormal", 
-        "center": 1.84e-6, 
-        "sigma_log": 0.079},
-    {"name": "rho_cv_sample", 
-        "type": "lognormal", 
-        "center": 5979912, 
-        "sigma_log": 0.079},
-    {"name": "rho_cv_coupler", 
-        "type": "lognormal", 
-        "center": 3445520, 
-        "sigma_log": 0.079},
-    {"name": "rho_cv_ins", 
-        "type": "lognormal", 
-        "center": 2759508, 
-        "sigma_log": 0.079},
-    {"name": "d_coupler", 
-        "type": "lognormal", 
-        "center": 6.2e-8, 
-        "sigma_log": 0.204},
-    {"name": "d_ins_pside", 
-        "type": "lognormal", 
-        "center": 3.2e-6, 
-        "sigma_log": 0.001},
-    {"name": "d_ins_oside", 
-        "type": "lognormal", 
-        "center": 6.3e-6, 
-        "sigma_log": 0.001},
-    {"name" : "fwhm",
-        "type": "lognormal",
-        "center": 12e-6,
-        "sigma_log": 0.041},
-    {"name" : "k_sample",
-        "type": "uniform",
-        "low": 2.0,
-        "high": 5.0},
-    {"name" : "k_ins",
-        "type": "uniform",
-        "low": 7,
-        "high": 13.0},
-    {"name" : "k_coupler",
-        "type": "uniform",
-        "low": 300,
-        "high": 400},
-]
+# Load parameter definitions from config file (same as training)
+from analysis.config_utils import get_param_defs_from_config, get_param_mapping_from_config
+param_defs = get_param_defs_from_config()
 
 # Generate samples from the same distributions as training
 test_samples = np.zeros((N_TEST, len(param_names)))
@@ -144,21 +100,8 @@ for i, param_def in enumerate(param_defs):
 results = []
 diagnostics = []  # list of dicts – one per successful simulation
 
-# Use the same param_defs as above (from generate_training_data.py)
-# param_defs is already defined above with the correct training distributions
-param_mapping = {
-    "d_sample": [("mats", "sample", "z")],
-    "rho_cv_sample": [("mats", "sample", "rho_cv")],
-    "rho_cv_coupler": [("mats", "p_coupler", "rho_cv"), ("mats", "o_coupler", "rho_cv")],
-    "rho_cv_ins": [("mats", "p_ins", "rho_cv"), ("mats", "o_ins", "rho_cv")],
-    "d_coupler": [("mats", "p_coupler", "z"), ("mats", "o_coupler", "z")],
-    "d_ins_oside": [("mats", "o_ins", "z")],
-    "d_ins_pside": [("mats", "p_ins", "z")],
-    "fwhm": [("heating", "fwhm")],
-    "k_sample": [("mats", "sample", "k")],
-    "k_ins": [("mats", "p_ins", "k"), ("mats", "o_ins", "k")],
-    "k_coupler": [("mats", "p_coupler", "k"), ("mats", "o_coupler", "k")],
-}
+# Load parameter mapping from config file
+param_mapping = get_param_mapping_from_config()
 
 for i, params in enumerate(test_samples):
     print(f"\nTest {i+1}/{N_TEST}")

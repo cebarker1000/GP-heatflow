@@ -31,9 +31,13 @@ def to_2d(arr, *, n_features):
 
 # --- load once at import time ----------------------------------------------
 from train_surrogate_models import FullSurrogateModel
+from analysis.config_utils import get_fixed_params_from_config
 surrogate_model = FullSurrogateModel.load_model("outputs/full_surrogate_model.pkl")
 
-N_TOTAL_PARAMS = 11          # 8 nuisance + 3 κ
+# Load fixed parameters from config file (centers of distributions, excluding k values)
+PARAMS_FIXED = get_fixed_params_from_config()
+
+N_TOTAL_PARAMS = PARAMS_FIXED.size + 3   # 11
 N_FPCS         = 5
 
 def fpca_model(params):
@@ -71,14 +75,7 @@ def timeseries_model(params):
     return np.array(curves)  # (n, T) where T is the number of time points
 
 # --- constants --------------------------------------------------------------
-PARAMS_FIXED = np.array([
-    1.84e-6,  5.979912e6, 3.445520e6, 2.759508e6,
-    6.2e-8,   3.2e-6,     6.3e-6,     12e-6,
-])                              # length-8  (nuisance)
-
-N_TOTAL_PARAMS = PARAMS_FIXED.size + 3   # 11
 FREE_COUNT     = 3                       # k_sample, k_ins, k_coupler
-N_FPCS         = 5
 
 # ---------------------------------------------------------------------------
 def log_likelihood(params_free,
