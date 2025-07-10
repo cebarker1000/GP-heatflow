@@ -5,7 +5,7 @@ Utility functions for reading and parsing configuration files.
 import yaml
 from typing import Dict, List, Any, Tuple
 import numpy as np
-from UQpy.distributions.collection import Uniform, Normal
+from UQpy.distributions.collection import Uniform, Normal, Lognormal
 
 
 def load_distributions_config(config_path: str = "configs/distributions.yaml") -> Dict[str, Any]:
@@ -119,9 +119,9 @@ def create_uqpy_distributions(param_defs: List[Dict[str, Any]]) -> List:
     distributions = []
     for p in param_defs:
         if p["type"] == "lognormal":
-            mu = np.log(p["center"])
-            sigma = p["sigma_log"]
-            distributions.append(Normal(loc=mu, scale=sigma))
+            sigma = p["sigma_log"]    
+            center = p["center"] 
+            distributions.append(Lognormal(s=sigma, scale=center))
         elif p["type"] == "normal":
             distributions.append(Normal(loc=p["center"], scale=p["sigma"]))
         elif p["type"] == "uniform":

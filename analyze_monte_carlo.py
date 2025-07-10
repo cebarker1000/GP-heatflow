@@ -3,6 +3,133 @@
 Numeric diagnostics for Monte Carlo kappa samples.
 """
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from analysis.uq_wrapper import load_fpca_model
+from analysis.config_utils import get_param_defs_from_config
+
+# Set style for better plots
+plt.style.use('seaborn-v0_8')
+sns.set_palette("husl")
+
+def create_pc_correlation_plots(mc_data, fpca_model, param_names, output_dir="outputs"):
+    """
+    Create correlation plots for each PC showing:
+    1. Bar chart of parameter correlations with PC scores
+    2. The PC eigenfunction curve
+    
+    Parameters:
+    -----------
+    mc_data : dict
+        Monte Carlo data containing pc_scores_samples and fixed_params_samples
+    fpca_model : dict
+        FPCA model containing eigenfunctions and other data
+    param_names : list
+        List of parameter names
+    output_dir : str
+        Directory to save plots
+    """
+    print("\n" + "="*60)
+    print("CREATING PC CORRELATION PLOTS")
+    print("="*60)
+    
+    # Extract data
+    pc_scores = mc_data['pc_scores_samples']  # shape (N, n_components)
+    fixed_params_dicts = mc_data['fixed_params_samples']  # shape (N,) - array of dicts
+    k_samples = mc_data['k_samples']  # shape (N, 3)
+    
+    # Convert fixed_params from array of dicts to 2D array
+    param_defs = get_param_defs_from_config()
+    fixed_param_names = [p["name"] for p in param_defs[:8]]  # First 8 are fixed params
+    
+    fixed_params = np.array([[sample[name] for name in fixed_param_names] 
+                            for sample in fixed_params_dicts])
+    
+    # Combine all parameters for correlation analysis
+    # Order: fixed_params (8) + k_samples (3) = 11 total
+    all_params = np.hstack([fixed_params, k_samples])  # shape (N, 11)
+    
+    # Get parameter names
+    param_defs = get_param_defs_from_config()
+    full_param_names = [p["name"] for p in param_defs]
+    
+    print(f"PC scores shape: {pc_scores.shape}")
+    print(f"All parameters shape: {all_params.shape}")
+    print(f"Number of PCs: {pc_scores.shape[1]}")
+    print(f"Number of parameters: {len(full_param_names)}")
+    
+    # Create figure with subplots for each PC
+    n_components = pc_scores.shape[1]
+    fig, axes = plt.subplots(n_components, 2, figsize=(16, 4 * n_components))
+    
+    # Time points for eigenfunction plots
+    time_points = np.linspace(0, 7.5e-6, fpca_model['eigenfunctions'].shape[0])
+    
+    for pc_idx in range(n_components):
+        print(f"\nAnalyzing PC{pc_idx + 1}...")
+        
+        # Get PC scores for this component
+        pc_scores_this = pc_scores[:, pc_idx]
+        
+        # Calculate correlations with all parameters
+        correlations = []
+        for param_idx in range(all_params.shape[1]):
+            corr = np.corrcoef(all_params[:, param_idx], pc_scores_this)[0, 1]
+            correlations.append(corr)
+        
+        # Create bar chart of correlations
+        ax1 = axes[pc_idx, 0] if n_components > 1 else axes[0]
+        bars = ax1.bar(range(len(full_param_names)), correlations, 
+                      color='skyblue', alpha=0.7, edgecolor='navy', linewidth=0.5)
+        
+        # Color bars based on correlation strength
+        for i, (bar, corr) in enumerate(zip(bars, correlations)):
+            if abs(corr) > 0.3:
+                bar.set_color('red' if corr > 0 else 'blue')
+                bar.set_alpha(0.8)
+        
+        ax1.set_title(f'PC{pc_idx + 1} Parameter Correlations', fontsize=14, fontweight='bold')
+        ax1.set_xlabel('Parameters')
+        ax1.set_ylabel('Pearson Correlation')
+        ax1.set_xticks(range(len(full_param_names)))
+        ax1.set_xticklabels(full_param_names, rotation=45, ha='right')
+        ax1.grid(True, alpha=0.3)
+        ax1.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+        
+        # Add correlation values on bars
+        for i, corr in enumerate(correlations):
+            ax1.text(i, corr + (0.02 if corr >= 0 else -0.02), 
+                    f'{corr:.3f}', ha='center', va='bottom' if corr >= 0 else 'top',
+                    fontsize=8, fontweight='bold')
+        
+        # Plot eigenfunction
+        ax2 = axes[pc_idx, 1] if n_components > 1 else axes[1]
+        eigenfunction = fpca_model['eigenfunctions'][:, pc_idx]
+        explained_var = fpca_model['explained_variance'][pc_idx]
+        
+        ax2.plot(time_points * 1e6, eigenfunction, 'r-', linewidth=2, 
+                label=f'PC{pc_idx + 1} ({explained_var:.1%} variance)')
+        ax2.set_title(f'PC{pc_idx + 1} Eigenfunction', fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Time (μs)')
+        ax2.set_ylabel('Eigenfunction Amplitude')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        
+        # Print top correlations
+        sorted_corrs = sorted(enumerate(correlations), key=lambda x: abs(x[1]), reverse=True)
+        print(f"  Top correlations with PC{pc_idx + 1}:")
+        for i, (param_idx, corr) in enumerate(sorted_corrs[:5]):
+            print(f"    {full_param_names[param_idx]:15s}: {corr:+.3f}")
+    
+    plt.tight_layout()
+    
+    # Save plot
+    plot_file = f"{output_dir}/pc_correlation_analysis.png"
+    plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+    print(f"\nPC correlation analysis plot saved to: {plot_file}")
+    plt.show()
+    
+    return correlations
 
 # Load MC results
 mc_data = np.load("outputs/propagated_k_values.npz", allow_pickle=True)
@@ -140,6 +267,34 @@ if fixed_params_samples is not None:
     
     print(f"\nNote: These are the averages of the {len(fixed_params_samples)} fixed parameter")
     print("draws used in the Monte Carlo process (not the kappa parameters above).")
+
+# 7. PC Correlation Analysis (if PC scores are available)
+if 'pc_scores_samples' in mc_data:
+    print("\n" + "=" * 40)
+    print("7. PC CORRELATION ANALYSIS")
+    print("=" * 40)
+    
+    # Load FPCA model
+    try:
+        fpca_model = load_fpca_model("outputs/fpca_model.npz")
+        print("FPCA model loaded successfully")
+        
+        # Get parameter names
+        param_defs = get_param_defs_from_config()
+        param_names = [p["name"] for p in param_defs]
+        
+        # Create PC correlation plots
+        create_pc_correlation_plots(mc_data, fpca_model, param_names)
+        
+    except Exception as e:
+        print(f"Could not create PC correlation plots: {e}")
+        print("Make sure fpca_model.npz exists in outputs/ directory")
+else:
+    print("\n" + "=" * 40)
+    print("7. PC CORRELATION ANALYSIS")
+    print("=" * 40)
+    print("PC scores not found in Monte Carlo data.")
+    print("Run uqpy_ls.py with --mc flag to generate PC scores.")
 
 print("\n" + "=" * 60)
 print("DIAGNOSTICS COMPLETE")

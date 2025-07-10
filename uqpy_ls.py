@@ -215,6 +215,7 @@ def main():
 
         k_samples = []
         fixed_params_samples = []  # Store the fixed parameters used for each draw
+        pc_scores_samples = []  # Store the PC scores for each draw
 
         iterator = trange(Nmc, desc="MC draws") if trange is not range else range(Nmc)
         for i in iterator:
@@ -234,6 +235,11 @@ def main():
             if res.success:
                 k_samples.append(res.x)
                 fixed_params_samples.append(fixed_draw)  # Store the fixed parameters
+                
+                # Calculate PC scores for this draw
+                full_vector = vector_from_dict(res.x, fixed_draw)
+                curve, fpca_coeffs, _, _ = surrogate.predict_temperature_curves(full_vector.reshape(1, -1))
+                pc_scores_samples.append(fpca_coeffs[0])  # Store PC scores (flatten batch dimension)
             else:
                 print(f"[warn] optimisation failed on draw {i}: {res.message}")
 
@@ -285,12 +291,16 @@ def main():
         best_rmse = np.sqrt(np.mean((best_curve - exp_timeseries) ** 2))
         print(f"Best draw RMSE: {best_rmse:.6f}")
         
+        # Convert PC scores to numpy array
+        pc_scores_samples = np.array(pc_scores_samples)
+        
         # Optionally save
         np.savez("outputs/propagated_k_values.npz", 
                  k_samples=k_samples, 
                  mean=means, 
                  std=stds,
                  fixed_params_samples=fixed_params_samples,
+                 pc_scores_samples=pc_scores_samples,
                  best_draw_idx=best_draw_idx)
         print("Saved raw samples to outputs/propagated_k_values.npz")
         
