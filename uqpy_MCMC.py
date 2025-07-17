@@ -61,14 +61,9 @@ def log_likelihood_full(params=None, data=None):
         y_pred = timeseries_model(params[i:i+1])  # Shape (1, T)
         ll = _gaussian_loglike(y_pred, data, sigma2=SENSOR_VARIANCE)
         log_L[i] = ll[0]  # Extract scalar value
-        
-        # Debug: Check parameter values occasionally
-        if CALLS % 1000 == 0 and i == 0:
-            print(f"Debug - params[i]: {params[i]}")
-            print(f"Debug - y_pred range: [{y_pred.min():.6f}, {y_pred.max():.6f}]")
             
     CALLS += params.shape[0]
-    if CALLS % 100 == 0:  # More frequent progress reporting
+    if CALLS % 2000 == 0:  # More frequent progress reporting
         print(f"{CALLS:,} proposals evaluated")
     return log_L
 
@@ -122,14 +117,14 @@ def main():
 
     
     stretch_sampler = Stretch(
-        burn_length=20000,           # Longer burn-in for 11 dimensions
-        jump=1,                      # No thinning during sampling
+        burn_length=20000,          
+        jump=1,                    
         dimension=11,
         seed=initial_positions,
         save_log_pdf=True,
-        scale=2.4,                   # Reduced scale for better acceptance
+        scale=2.4,                   
         n_chains=n_walkers,
-        concatenate_chains=False     # Keep chains separate for proper ESS calculation
+        concatenate_chains=False     
     )
     dream_sampler = DREAM(
         burn_length=20000,
@@ -146,7 +141,7 @@ def main():
         inference_model=ll_model,
         data=y_obs_interp,
         sampling_class=stretch_sampler,
-        nsamples=200000 
+        nsamples=1500000 
     )
     
     samples_full = bpe.sampler.samples               # (N, 11)

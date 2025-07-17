@@ -219,7 +219,7 @@ class SurrogatePlotter:
                 "d_coupler": 6.2e-8,       # Center of lognormal distribution
                 "d_ins_oside": 3.2e-6,     # Center of lognormal distribution
                 "d_ins_pside": 6.3e-6,     # Center of lognormal distribution
-                "fwhm": 12e-6,             # Center of lognormal distribution
+                "fwhm": 13.2e-6,             # Center of lognormal distribution
                 "k_sample": 3.8,           # Center of uniform range (2.8, 4.8)
                 "k_ins": 10.0,             # Center of uniform range (7.0, 13.0)
                 "k_coupler": 350.0,        # Center of uniform range (300, 400)
@@ -374,8 +374,8 @@ def main():
     # Set your thermal conductivity parameters here
     # Modify these values to fine-tune the fit
     k_sample = 3.4  # Try different values: 3.0, 3.5, 4.0, 4.5, etc.
-    k_ins = 9.8    # Fixed
-    k_coupler = 356.0  # Fixed
+    k_ins = 12    # Fixed
+    k_coupler = 10.0  # Fixed
     
     print(f"\nTesting parameters: k_sample={k_sample}, k_ins={k_ins}, k_coupler={k_coupler}")
     
