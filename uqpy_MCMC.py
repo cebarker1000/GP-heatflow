@@ -21,8 +21,7 @@ logging.getLogger("UQpy").setLevel(logging.DEBUG)
 
 param_defs = get_param_defs_from_config(config_path="configs/distributions.yaml")
 uqpy_dists = create_uqpy_distributions(param_defs)
-non_k_prior = JointIndependent(marginals=uqpy_dists[:8])
-k_prior = JointIndependent(marginals=uqpy_dists[8:])
+full_prior = JointIndependent(marginals=uqpy_dists)  # All 11 parameters
 
 # Load experimental data
 def load_experimental_data():
@@ -44,61 +43,36 @@ def interpolate_to_surrogate_grid(exp_data, exp_time):
 
 SENSOR_VARIANCE = 1e-4  # You can adjust this value based on your sensor characteristics
 
-M_MC = 200                       # total phi draws
-PHI_STORE = []                   # stores phi draws
-
 def _gaussian_loglike(y_pred: np.ndarray, y_obs: np.ndarray, *, sigma2: float) -> np.ndarray:
     resid = y_pred - y_obs              # (m, T)
     return -0.5 * np.sum(resid ** 2 / sigma2 + np.log(2 * np.pi * sigma2), axis=1)
 
 CALLS = 0
-phi_batch = non_k_prior.rvs(nsamples=M_MC)  # (M, 8)
-PHI_STORE.append(phi_batch)
 
-def log_likelihood_mc(params=None, data=None, m_mc_test=None):
+def log_likelihood_full(params=None, data=None):
+    """Log likelihood function for full 11-parameter MCMC"""
     global CALLS
-    params = np.atleast_2d(params)      # (n, 3)
+    params = np.atleast_2d(params)      # (n, 11)
     n, _ = params.shape
     log_L = np.empty(n)
     
-    # Use test M_MC value if provided, otherwise use global M_MC
-    m_mc_to_use = m_mc_test if m_mc_test is not None else M_MC
-    
     for i in range(n):
-        # For actual MCMC (m_mc_test is None), always use the global phi_batch
-        # For testing (m_mc_test is not None), generate new batches
-        if m_mc_test is not None:
-            # For testing, generate new batch with test size
-            phi_batch_test = non_k_prior.rvs(nsamples=m_mc_to_use)
-        else:
-            # For actual MCMC, always use the global phi_batch
-            phi_batch_test = phi_batch
-            
-        params_full = np.hstack([phi_batch_test, np.tile(params[i], (m_mc_to_use, 1))])  # (M, 11)
+        # Generate predictions using the surrogate model
+        y_pred = timeseries_model(params[i:i+1])  # Shape (1, T)
+        ll = _gaussian_loglike(y_pred, data, sigma2=SENSOR_VARIANCE)
+        log_L[i] = ll[0]  # Extract scalar value
         
         # Debug: Check parameter values occasionally
         if CALLS % 1000 == 0 and i == 0:
             print(f"Debug - params[i]: {params[i]}")
-            print(f"Debug - phi_batch_test range: [{phi_batch_test.min():.3f}, {phi_batch_test.max():.3f}]")
-            print(f"Debug - params_full range: [{params_full.min():.3f}, {params_full.max():.3f}]")
-        
-        y_pred = timeseries_model(params_full)  # (M, T)
-        ll_batch = _gaussian_loglike(y_pred, data, sigma2=SENSOR_VARIANCE)
-        log_L[i] = logsumexp(ll_batch) - np.log(m_mc_to_use)
-        
-        # Only store phi_batch for actual MCMC (not during testing)
-        if m_mc_test is None:
-            PHI_STORE.append(phi_batch)  # Store the global batch
+            print(f"Debug - y_pred range: [{y_pred.min():.6f}, {y_pred.max():.6f}]")
             
     CALLS += params.shape[0]
     if CALLS % 100 == 0:  # More frequent progress reporting
         print(f"{CALLS:,} proposals evaluated")
     return log_L
 
-
-
 def main():
-    global M_MC
     import time
     start_time = time.time()
     
@@ -108,8 +82,8 @@ def main():
     print("\n" + "=" * 60)
     print("MCMC SIMULATION SETUP")
     print("=" * 60)
-    print(f"Current M_MC: {M_MC}")
-    print("You can modify M_MC at the top of the file if needed.")
+    print("Full 11-parameter MCMC with experimental data")
+    print("All parameters (nuisance + k values) sampled from their priors")
     
     print("\nProceed with MCMC simulation?")
     response = input("Enter 'y' to continue, 'q' to quit: ").lower().strip()
@@ -126,131 +100,150 @@ def main():
     CALLS = 0
     print(f"Reset CALLS counter to {CALLS}")
     
-    ll_model = LogLikelihoodModel(n_parameters=3, log_likelihood=log_likelihood_mc)
-    ll_model.prior = k_prior
-    # Note: Stretch sampler doesn't use a proposal distribution - it generates proposals
-    # by stretching the ensemble of walkers. The prior is used in the Bayesian inference.
-    n_walkers = 12  # Number of walkers in the ensemble
-    # Draw initial positions from k_prior instead of hardcoded values
-    best_fit = [3.3, 10.0, 350.0]
-    seed_std_devs = [0.1, 1, 10]
-    initial_positions = np.random.normal(loc=best_fit, scale=seed_std_devs, size=(n_walkers, 3))
+    ll_model = LogLikelihoodModel(n_parameters=11, log_likelihood=log_likelihood_full)
+    ll_model.prior = full_prior
+    
+    # Set up sampler
+    n_walkers = 60  # More walkers for 11 dimensions
+    param_names = [param_def['name'] for param_def in param_defs]
+    
+    # Draw initial positions from prior
+    best_fit = np.array([     
+    1.88e-6, 6.1e6, 3.44e6, 2.75e6, 6.2e-8,
+    3.20e-6, 6.30e-6, 1.33e-5, 3.56, 9.81, 4.0e2
+    ])
+
+    n_walkers = 44                     
+    jitter_frac = 0.1                 
+
+    noise = jitter_frac * np.abs(best_fit) * np.random.randn(n_walkers, best_fit.size)
+    initial_positions = best_fit + noise        # shape (n_walkers, 11)
     initial_positions = initial_positions.tolist()
-    # initial_positions = k_prior.rvs(nsamples=n_walkers).tolist()
+
+    
     stretch_sampler = Stretch(
-        burn_length=10000,           # Longer burn-in
+        burn_length=20000,           # Longer burn-in for 11 dimensions
         jump=1,                      # No thinning during sampling
-        dimension=3,
+        dimension=11,
         seed=initial_positions,
         save_log_pdf=True,
-        scale=2.8,                   # Reduced scale for better acceptance
+        scale=2.4,                   # Reduced scale for better acceptance
         n_chains=n_walkers,
         concatenate_chains=False     # Keep chains separate for proper ESS calculation
     )
-    mh_sampler = MetropolisHastings(
-        burn_length=10000,
-        jump=5,                      # Thinning parameter
-        dimension=3,
+    dream_sampler = DREAM(
+        burn_length=20000,
+        jump=1,
+        dimension=11,
         seed=initial_positions,
         save_log_pdf=True,
-    )
-    dram_sampler = DRAM(
-        burn_length=20000,           # Longer burn-in
-        jump=1,                      # No thinning during sampling
-        dimension=3,
-        seed=initial_positions,
-        save_log_pdf=True,
+        n_chains=n_walkers,
+        concatenate_chains=False,
+        c_star = 1e-11,
     )
     
     bpe = BayesParameterEstimation(
         inference_model=ll_model,
         data=y_obs_interp,
         sampling_class=stretch_sampler,
-        nsamples=40000 
+        nsamples=200000 
     )
-    samples_kappa = bpe.sampler.samples               # (N, 3)
-    phi_chain = np.vstack(PHI_STORE)
+    
+    samples_full = bpe.sampler.samples               # (N, 11)
     accepted_mask = np.isfinite(bpe.sampler.log_pdf_values)
     elapsed_time = time.time() - start_time
+    
     np.savez("mcmc_results.npz", 
-             samples_kappa=samples_kappa,
-             phi_chain=phi_chain,
+             samples_full=samples_full,
              accepted_mask=accepted_mask,
              log_pdf_values=bpe.sampler.log_pdf_values)
-    print("\nMCMC complete!  Accepted samples:", samples_kappa.shape[0])
+    
+    print("\nMCMC complete!  Accepted samples:", samples_full.shape[0])
     print("Acceptance rate:", bpe.sampler.acceptance_rate)
     
     # Handle different sample formats (2D vs 3D)
-    if len(samples_kappa.shape) == 3:
+    if len(samples_full.shape) == 3:
         # Samples are in format (n_samples, n_chains, n_dimensions)
         # Flatten to (n_samples * n_chains, n_dimensions) for statistics
-        samples_flat = samples_kappa.reshape(-1, samples_kappa.shape[2])
-        print(f"Sample format: 3D with shape {samples_kappa.shape}, flattened to {samples_flat.shape}")
+        samples_flat = samples_full.reshape(-1, samples_full.shape[2])
+        print(f"Sample format: 3D with shape {samples_full.shape}, flattened to {samples_flat.shape}")
     else:
         # Samples are in flat format (n_samples, n_dimensions)
-        samples_flat = samples_kappa
-        print(f"Sample format: 2D with shape {samples_kappa.shape}")
+        samples_flat = samples_full
+        print(f"Sample format: 2D with shape {samples_full.shape}")
     
-    print("k_sample mean ± σ:", samples_flat[:, 0].mean(), samples_flat[:, 0].std())
-    print("k_ins    mean ± σ:", samples_flat[:, 1].mean(), samples_flat[:, 1].std())
-    print("k_coupler mean ± σ:", samples_flat[:, 2].mean(), samples_flat[:, 2].std())
+    # Print parameter statistics
+    print(f"\nParameter Statistics (mean ± σ):")
+    print(f"{'Parameter':<15} {'Posterior Mean':<15} {'Posterior Std':<15}")
+    print("-" * 50)
+    
+    for i, name in enumerate(param_names):
+        post_mean = samples_flat[:, i].mean()
+        post_std = samples_flat[:, i].std()
+        print(f"{name:<15} {post_mean:<15.3e} {post_std:<15.3e}")
     
     # Print convergence diagnostics
     print(f"\nConvergence Diagnostics:")
-    if len(samples_kappa.shape) == 3:
-        print(f"  Total samples: {samples_kappa.shape[0] * samples_kappa.shape[1]}")
-        print(f"  Samples per walker: {samples_kappa.shape[0]}")
-        print(f"  Number of walkers: {samples_kappa.shape[1]}")
+    if len(samples_full.shape) == 3:
+        print(f"  Total samples: {samples_full.shape[0] * samples_full.shape[1]}")
+        print(f"  Samples per walker: {samples_full.shape[0]}")
+        print(f"  Number of walkers: {samples_full.shape[1]}")
     else:
-        print(f"  Total samples: {samples_kappa.shape[0]}")
-        print(f"  Samples per walker: {samples_kappa.shape[0] // n_walkers}")
+        print(f"  Total samples: {samples_full.shape[0]}")
+        print(f"  Samples per walker: {samples_full.shape[0] // n_walkers}")
     print(f"  Total time: {elapsed_time:.1f} seconds")
-    if len(samples_kappa.shape) == 3:
-        print(f"  Time per sample: {elapsed_time/(samples_kappa.shape[0] * samples_kappa.shape[1]):.3f} seconds")
+    if len(samples_full.shape) == 3:
+        print(f"  Time per sample: {elapsed_time/(samples_full.shape[0] * samples_full.shape[1]):.3f} seconds")
     else:
-        print(f"  Time per sample: {elapsed_time/samples_kappa.shape[0]:.3f} seconds")
+        print(f"  Time per sample: {elapsed_time/samples_full.shape[0]:.3f} seconds")
     if hasattr(bpe.sampler, 'scale'):
         print(f"  Scale parameter: {bpe.sampler.scale}")
-    
     
     print("MCMC results saved to mcmc_results.npz")
     
     # Handle different sample formats for plotting
-    if len(samples_kappa.shape) == 3:
+    if len(samples_full.shape) == 3:
         # Flatten samples for plotting
-        samples_plot = samples_kappa.reshape(-1, samples_kappa.shape[2])
+        samples_plot = samples_full.reshape(-1, samples_full.shape[2])
     else:
-        samples_plot = samples_kappa
+        samples_plot = samples_full
+    
+    # Create corner plot for key parameters (k values)
+    k_indices = [8, 9, 10]  # k_sample, k_ins, k_coupler
+    k_names = ['k_sample', 'k_ins', 'k_coupler']
+    k_samples = samples_plot[:, k_indices]
     
     plt.figure(figsize=(6,4))
-    plt.scatter(samples_plot[:, 0], samples_plot[:, 1], s=2, alpha=0.4)
+    plt.scatter(k_samples[:, 0], k_samples[:, 1], s=2, alpha=0.4)
     plt.xlabel("k_sample")
     plt.ylabel("k_ins")
-    plt.title("Posterior samples (projection)")
+    plt.title("Posterior samples (k_sample vs k_ins)")
     plt.tight_layout()
+    plt.savefig("k_corner_plot.png", dpi=300, bbox_inches="tight")
     plt.show()
+    
     try:
         import corner
         fig_corner = corner.corner(
-            samples_plot,
+            k_samples,
             labels=[r"$k_{\text{sample}}$", r"$k_{\text{ins}}$", r"$k_{\text{coupler}}$"],
             show_titles=True,
             title_fmt=".2f",
             title_kwargs={"fontsize": 10}
         )
-        fig_corner.savefig("corner_plot.png", dpi=300, bbox_inches="tight")
-        print("Corner plot saved to corner_plot.png")
+        fig_corner.savefig("k_corner_plot.png", dpi=300, bbox_inches="tight")
+        print("Corner plot saved to k_corner_plot.png")
         plt.show()
     except ImportError:
         import pandas as pd
         import seaborn as sns
-        df_samples = pd.DataFrame(samples_plot, columns=["k_sample", "k_ins", "k_coupler"])
+        df_samples = pd.DataFrame(k_samples, columns=k_names)
         g = sns.pairplot(df_samples, corner=True, diag_kind="kde", plot_kws={"s": 5, "alpha": 0.4})
-        g.figure.suptitle("Pair plot (corner style)")
+        g.figure.suptitle("Pair plot (corner style) - k parameters")
         g.figure.tight_layout()
         g.figure.subplots_adjust(top=0.95)
-        g.figure.savefig("corner_plot.png", dpi=300, bbox_inches="tight")
-        print("Pair plot saved to corner_plot.png (corner library not installed)")
+        g.figure.savefig("k_corner_plot.png", dpi=300, bbox_inches="tight")
+        print("Pair plot saved to k_corner_plot.png (corner library not installed)")
         plt.show()
 
 if __name__ == "__main__":

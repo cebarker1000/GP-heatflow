@@ -119,7 +119,7 @@ class SurrogatePlotter:
             
             # Create interpolation function for the overlapping range
             interp_func = interp1d(exp_time, exp_data, kind=method, 
-                                  bounds_error=False, fill_value=exp_data[0])
+                                  bounds_error=False, fill_value=(exp_data[0], exp_data[-1]))
             
             # Interpolate the overlapping range
             aligned_data = np.zeros_like(self.sim_time_grid)
@@ -269,7 +269,7 @@ class SurrogatePlotter:
         print(f"  Other parameters: {'mean values' if use_mean_values else 'center values'}")
         
         # Run surrogate model
-        predicted_curve, fpca_scores, uncertainties = self.surrogate.predict_temperature_curves(param_vector.reshape(1, -1))
+        predicted_curve, fpca_scores, uncertainties, _ = self.surrogate.predict_temperature_curves(param_vector.reshape(1, -1))
         
         # Extract single curve (remove batch dimension)
         predicted_curve = predicted_curve[0]
@@ -373,9 +373,9 @@ def main():
     
     # Set your thermal conductivity parameters here
     # Modify these values to fine-tune the fit
-    k_sample = 3.5  # Try different values: 3.0, 3.5, 4.0, 4.5, etc.
-    k_ins = 10.0    # Fixed
-    k_coupler = 352.0  # Fixed
+    k_sample = 3.4  # Try different values: 3.0, 3.5, 4.0, 4.5, etc.
+    k_ins = 9.8    # Fixed
+    k_coupler = 356.0  # Fixed
     
     print(f"\nTesting parameters: k_sample={k_sample}, k_ins={k_ins}, k_coupler={k_coupler}")
     
