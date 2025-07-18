@@ -10,6 +10,7 @@ import time
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from core.simulation_engine import OptimizedSimulationEngine, suppress_output
 from analysis import analysis_utils as au
@@ -155,13 +156,17 @@ def plot_temperature_curves(cfg, output_folder):
         
         df_sim = pd.read_csv(watcher_csv_path)
         
-        # Load experimental data
-        exp_file = cfg['heating']['file']
-        if not os.path.exists(exp_file):
-            print(f"Warning: Experimental data file not found at {exp_file}")
-            return
-        
-        df_exp = pd.read_csv(exp_file)
+        # Load experimental data - check for processed data first
+        processed_data_path = os.path.join(output_folder, 'processed_experimental_data.csv')
+        if os.path.exists(processed_data_path):
+            print(f"Loading processed experimental data from: {processed_data_path}")
+            df_exp = pd.read_csv(processed_data_path)
+        else:
+            exp_file = cfg['heating']['file']
+            if not os.path.exists(exp_file):
+                print(f"Warning: Experimental data file not found at {exp_file}")
+                return
+            df_exp = pd.read_csv(exp_file)
         
         # Get watcher point names from config
         watcher_points = cfg['output']['watcher_points']['points']
@@ -180,8 +185,25 @@ def plot_temperature_curves(cfg, output_folder):
         sim_pside_normed = (df_sim[pside_col] - df_sim[pside_col].iloc[0]) / pside_excursion
         sim_oside_normed = (df_sim[oside_col] - df_sim[oside_col].iloc[0]) / pside_excursion
         
-        # Normalize experimental data
-        exp_pside_normed = (df_exp['temp'] - df_exp['temp'].iloc[0]) / (df_exp['temp'].max() - df_exp['temp'].min())
+        # Check if smoothing was applied and handle experimental data accordingly
+        smoothing_enabled = cfg.get('heating', {}).get('smoothing', {}).get('enabled', False)
+        
+        if smoothing_enabled and 'temp_raw' in df_exp.columns:
+            # Use smoothed data for normalization (same as simulation)
+            exp_temp_for_norm = df_exp['temp']  # smoothed data
+            exp_temp_raw = df_exp['temp_raw']   # raw data
+            
+            # Normalize both raw and smoothed data using the same normalization factor (smoothed data range)
+            # This ensures they're on the same scale for comparison
+            smoothed_range = df_exp['temp'].max() - df_exp['temp'].min()
+            exp_pside_normed = (df_exp['temp'] - df_exp['temp'].iloc[0]) / smoothed_range
+            exp_pside_raw_normed = (df_exp['temp_raw'] - df_exp['temp_raw'].iloc[0]) / smoothed_range
+        else:
+            # No smoothing applied, use regular temp data
+            exp_temp_for_norm = df_exp['temp']
+            exp_temp_raw = None
+            exp_pside_normed = (df_exp['temp'] - df_exp['temp'].iloc[0]) / (df_exp['temp'].max() - df_exp['temp'].min())
+            exp_pside_raw_normed = None
         
         # Handle experimental oside data if available
         if 'oside' in df_exp.columns:
@@ -189,21 +211,53 @@ def plot_temperature_curves(cfg, output_folder):
             ic_temp = cfg['heating']['ic_temp']
             oside_initial = df_exp['oside'].iloc[0]
             exp_oside_shifted = df_exp['oside'] - oside_initial + ic_temp
-            exp_oside_normed = (exp_oside_shifted - exp_oside_shifted.iloc[0]) / (df_exp['temp'].max() - df_exp['temp'].min())
+            exp_oside_normed = (exp_oside_shifted - exp_oside_shifted.iloc[0]) / (exp_temp_for_norm.max() - exp_temp_for_norm.min())
         else:
             # If no oside data, use pside data for both (common in some experiments)
             exp_oside_normed = exp_pside_normed.copy()
         
-        # Plot normalized temperature curves
+        # Plot normalized temperature curves with enhanced experimental data display
         plot_path = os.path.join(output_folder, 'temperature_curves.png')
-        au.plot_temperature_curves(
-            sim_time=df_sim['time'],
-            sim_pside=sim_pside_normed,
-            sim_oside=sim_oside_normed,
-            exp_pside=exp_pside_normed,
-            exp_oside=exp_oside_normed,
+        
+        # Create single plot showing simulation and experimental data
+        plt.figure(figsize=(12, 8))
+        
+        # Plot simulation curves
+        plt.plot(df_sim['time'], sim_pside_normed, 'b-', linewidth=2, label='Sim P-side')
+        plt.plot(df_sim['time'], sim_oside_normed, 'r-', linewidth=2, label='Sim O-side')
+        
+        # Plot experimental data
+        if exp_pside_raw_normed is not None:
+            # When smoothing is enabled, show both raw and smoothed
+            plt.scatter(df_exp['time'], exp_pside_normed, color='blue', marker='o', s=40, label='Exp P-side (smoothed)')
+            plt.scatter(df_exp['time'], exp_pside_raw_normed, color='lightblue', marker='x', s=30, 
+                       alpha=0.7, label='Exp P-side (raw)')
+        else:
+            # If no smoothing, just show the regular pside data
+            plt.scatter(df_exp['time'], exp_pside_normed, color='blue', marker='o', s=40, label='Exp P-side')
+        
+        plt.scatter(df_exp['time'], exp_oside_normed, color='red', marker='o', s=40, label='Exp O-side')
+        
+        plt.xlabel('Time (s)', fontsize=12)
+        plt.ylabel('Normalized Temperature', fontsize=12)
+        plt.title('Temperature: Simulation vs Experiment', fontsize=14, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend(fontsize=11)
+        plt.tight_layout()
+        
+        # Save plot
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        print(f"Temperature curves plot saved to: {plot_path}")
+        plt.show()
+        
+        # Create residual plot for oside data
+        residual_plot_path = os.path.join(output_folder, 'residual_plot.png')
+        au.plot_residuals(
             exp_time=df_exp['time'],
-            save_path=plot_path,
+            exp_data=exp_oside_normed,
+            sim_time=df_sim['time'],
+            sim_data=sim_oside_normed,
+            save_path=residual_plot_path,
             show_plot=True
         )
         
@@ -215,12 +269,41 @@ def plot_temperature_curves(cfg, output_folder):
             sim_data=sim_oside_normed
         )
         
-        print(f"\n--- RMSE Analysis ---")
+        # Calculate residual variance (sensor noise) for oside data
+        oside_residual_stats = au.calculate_residual_variance(
+            exp_time=df_exp['time'],
+            exp_data=exp_oside_normed,
+            sim_time=df_sim['time'],
+            sim_data=sim_oside_normed
+        )
+        
+        print(f"\n--- Analysis Results ---")
         print(f"O-side RMSE: {oside_rmse:.4f}")
-        print("-------------------\n")
+        print(f"Residual Variance (sensor noise): {oside_residual_stats['variance']:.6f}")
+        print(f"Residual Std Dev (sensor noise): {oside_residual_stats['std']:.6f}")
+        if smoothing_enabled:
+            print(f"Savitzky-Golay smoothing: Enabled")
+        print("------------------------\n")
+        
+        # Save residual statistics to a file for further analysis
+        residual_stats_path = os.path.join(output_folder, 'residual_statistics.txt')
+        with open(residual_stats_path, 'w') as f:
+            f.write("Residual Analysis Results\n")
+            f.write("=" * 30 + "\n\n")
+            f.write(f"O-side RMSE: {oside_rmse:.6f}\n")
+            f.write(f"Residual Variance (sensor noise): {oside_residual_stats['variance']:.8f}\n")
+            f.write(f"Residual Standard Deviation (sensor noise): {oside_residual_stats['std']:.8f}\n")
+            f.write(f"Number of data points: {len(oside_residual_stats['residuals'])}\n")
+            f.write(f"Residual range: [{oside_residual_stats['residuals'].min():.6f}, {oside_residual_stats['residuals'].max():.6f}]\n")
+            if smoothing_enabled:
+                f.write(f"Savitzky-Golay smoothing: Enabled\n")
+        
+        print(f"Residual statistics saved to: {residual_stats_path}")
         
     except Exception as e:
         print(f"Error plotting results: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def print_timing_summary(results: Dict[str, Any]):
@@ -293,11 +376,11 @@ def main():
                 output_dir=output_folder,
                 rebuild_mesh=args.rebuild_mesh,
                 suppress_output_flag=args.suppress_output,
-                no_plots=getattr(args, 'no_plots', False),
-                no_xdmf=getattr(args, 'no_xdmf', False),
+                no_plots=not args.plot,  # Invert the plot flag
+                no_xdmf=False,  # Default to creating XDMF files
                 mesh_vis=args.visualize_mesh,
-                mesh_dir=args.mesh_folder if hasattr(args, 'mesh_folder') and args.mesh_folder is not None else None,
-                experimental_data=args.experimental_data if hasattr(args, 'experimental_data') and args.experimental_data is not None else None,
+                mesh_dir=args.mesh_folder,
+                experimental_data=None,  # Use config file setting
                 config_path=args.config
             )
             

@@ -56,7 +56,7 @@ heating:
   # Boundary condition configuration
   bc:
     type: "gaussian"
-    location: "inner"
+    location: "zmin"
     material: "p_coupler"  # Specify which material to apply heating to
     center: 0.0
 

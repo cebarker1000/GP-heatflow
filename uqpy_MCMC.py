@@ -41,7 +41,7 @@ def interpolate_to_surrogate_grid(exp_data, exp_time):
     interpolated_data = interp_func(surrogate_time_grid)
     return interpolated_data
 
-SENSOR_VARIANCE = 1e-4  # You can adjust this value based on your sensor characteristics
+SENSOR_VARIANCE = 0.0012  # You can adjust this value based on your sensor characteristics
 
 def _gaussian_loglike(y_pred: np.ndarray, y_obs: np.ndarray, *, sigma2: float) -> np.ndarray:
     resid = y_pred - y_obs              # (m, T)

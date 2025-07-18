@@ -365,6 +365,41 @@ class OptimizedSimulationEngine:
                     .dropna(subset=['time', 'temp'])
                     .reset_index(drop=True))
         
+        # Apply Savitzky-Golay smoothing if configured
+        smoothing_cfg = self.cfg.get('heating', {}).get('smoothing', {})
+        if smoothing_cfg.get('enabled', False):
+            try:
+                from scipy.signal import savgol_filter
+                
+                # Get smoothing parameters
+                window_length = smoothing_cfg.get('window_length', 11)
+                polyorder = smoothing_cfg.get('polyorder', 3)
+                
+                # Ensure window_length is odd and not larger than data length
+                if window_length % 2 == 0:
+                    window_length += 1
+                if window_length > len(df_heat):
+                    window_length = len(df_heat) if len(df_heat) % 2 == 1 else len(df_heat) - 1
+                
+                # Apply Savitzky-Golay filter
+                temp_smoothed = savgol_filter(df_heat['temp'].values, window_length, polyorder)
+                
+                # Store both raw and smoothed data
+                df_heat['temp_raw'] = df_heat['temp'].copy()
+                df_heat['temp'] = temp_smoothed
+                
+                # Save processed data to output folder for plotting
+                processed_data_path = os.path.join(self.output_folder, 'processed_experimental_data.csv')
+                df_heat.to_csv(processed_data_path, index=False)
+                
+                print(f"Applied Savitzky-Golay smoothing: window={window_length}, polyorder={polyorder}")
+                print(f"Processed experimental data saved to: {processed_data_path}")
+                
+            except ImportError:
+                print("Warning: scipy.signal not available, skipping Savitzky-Golay smoothing")
+            except Exception as e:
+                print(f"Warning: Error applying Savitzky-Golay smoothing: {e}")
+        
         return df_heat
     
     def _setup_boundary_conditions(self, V, materials, heating_data):
@@ -419,8 +454,18 @@ class OptimizedSimulationEngine:
                 inner_mat = list(materials.values())[0]
             
             # Use the z-coordinate of the material boundary (like original code)
-            coord = inner_mat.boundaries[0]  # zmin of material
+            # coord = inner_mat.boundaries[0]  # zmin of material
             
+            # Determine which edge to apply the BC on
+            bc_location = bc_cfg.get('location', 'zmin').lower()
+            if bc_location == 'zmin':
+                coord = inner_mat.boundaries[0]  # zmin of material
+            elif bc_location == 'zmax':
+                coord = inner_mat.boundaries[1]  # zmax of material
+            else:
+                print(f"Warning: Invalid heating.bc.location '{bc_location}'. Defaulting to 'zmin'.")
+                coord = inner_mat.boundaries[0]
+
             # Calculate length for BC segment - use the sample radius (like original code)
             # Find the sample material to get its radius
             sample_material = None
@@ -438,7 +483,7 @@ class OptimizedSimulationEngine:
                 length = abs(heating_r) * 2
             
             # Print boundary condition info
-            print(f"Heating BC: material={heating_material}, coord={coord:.2e}, length={length:.2e}")
+            print(f"Heating BC: material={heating_material}, coord={coord:.2e}, length={length:.2e}, location={bc_location}")
             
             # Create RowDirichletBC with location='x' and coord parameter (like original)
             try:
@@ -610,8 +655,15 @@ class OptimizedSimulationEngine:
                         self.cfg.get('layout', {}).get('materials', list(self.cfg['mats'].keys()))
                     )
                     if heating_material in heating_boundaries:
-                        # Use the left edge of the heating material (where BC is applied)
-                        z_coord = heating_boundaries[heating_material][0]  # zmin
+                        # Use the same logic as boundary condition setup to determine zmin vs zmax
+                        bc_location = heating_cfg.get('location', 'zmin').lower()
+                        if bc_location == 'zmin':
+                            z_coord = heating_boundaries[heating_material][0]  # zmin
+                        elif bc_location == 'zmax':
+                            z_coord = heating_boundaries[heating_material][1]  # zmax
+                        else:
+                            print(f"Warning: Invalid heating.bc.location '{bc_location}'. Defaulting to 'zmin'.")
+                            z_coord = heating_boundaries[heating_material][0]  # zmin
                         r_coord = 0.0  # Center of radial direction
                     else:
                         raise ValueError(f"Heating material '{heating_material}' not found in layout")

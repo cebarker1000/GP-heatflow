@@ -389,14 +389,24 @@ def get_parameter_ranges():
     }
     return param_ranges
 
-def create_gp_model(kernel_type='rbf'):
+def create_gp_model(kernel_type='rbf', n_dimensions=None):
     """
     Create a Gaussian Process model with specified kernel.
+    
+    Parameters:
+    -----------
+    kernel_type : str
+        Type of kernel to use ('rbf' or 'matern')
+    n_dimensions : int
+        Number of input dimensions for the kernel
     """
+    if n_dimensions is None:
+        raise ValueError("n_dimensions must be specified")
+    
     if kernel_type == 'rbf':
-        kernel = ConstantKernel(1.0) * RBF(length_scale=np.ones(11)) + WhiteKernel(noise_level=1e-6)
+        kernel = ConstantKernel(1.0) * RBF(length_scale=np.ones(n_dimensions)) + WhiteKernel(noise_level=1e-6)
     elif kernel_type == 'matern':
-        kernel = ConstantKernel(1.0) * Matern(length_scale=np.ones(11), nu=1.5) + WhiteKernel(noise_level=1e-6)
+        kernel = ConstantKernel(1.0) * Matern(length_scale=np.ones(n_dimensions), nu=1.5) + WhiteKernel(noise_level=1e-6)
     else:
         raise ValueError(f"Unknown kernel type: {kernel_type}")
     
@@ -463,8 +473,19 @@ def train_surrogate_model(input_path="outputs/training_data_fpca.npz",
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # Get parameter ranges
-    param_ranges = get_parameter_ranges()
+    # Get parameter ranges from Edmund config instead of hardcoded values
+    from analysis.config_utils import get_param_defs_from_config
+    param_defs = get_param_defs_from_config(config_path="configs/distributions_edmund.yaml")
+    param_ranges = {}
+    for param_def in param_defs:
+        name = param_def['name']
+        if param_def['type'] == 'uniform':
+            param_ranges[name] = (param_def['low'], param_def['high'])
+        elif param_def['type'] == 'normal':
+            # For normal distributions, use ±3σ range
+            center = param_def['center']
+            sigma = param_def['sigma']
+            param_ranges[name] = (center - 3*sigma, center + 3*sigma)
 
     # Train GP for each FPCA component
     print("\n4. Training GP models for each FPCA component...")
@@ -475,7 +496,7 @@ def train_surrogate_model(input_path="outputs/training_data_fpca.npz",
 
     for i in range(fpca_model['n_components']):
         print(f"\nTraining GP for PC{i+1}...")
-        gp = create_gp_model('rbf')
+        gp = create_gp_model('rbf', n_dimensions=X_train_scaled.shape[1])
         gp.fit(X_train_scaled, y_train[:, i])
 
         # Evaluate training performance

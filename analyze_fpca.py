@@ -1,5 +1,6 @@
 import sys
-
+import argparse
+import os
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -180,7 +181,7 @@ def compute_reconstruction_error(original, reconstructed):
         'curve_errors': curve_errors
     }
 
-def plot_eigenfunctions(fpca_results, n_components=3, figsize=(15, 10)):
+def plot_eigenfunctions(fpca_results, n_components=3, figsize=(15, 10), output_dir="outputs"):
     """
     Plot the first n eigenfunctions.
     """
@@ -231,10 +232,10 @@ def plot_eigenfunctions(fpca_results, n_components=3, figsize=(15, 10)):
     axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('outputs/fpca_eigenfunctions.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'fpca_eigenfunctions.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
-def plot_reconstruction_examples(original_curves, fpca_results, n_examples=6, figsize=(15, 12)):
+def plot_reconstruction_examples(original_curves, fpca_results, n_examples=6, figsize=(15, 12), output_dir="outputs"):
     """
     Plot examples of original vs reconstructed curves.
     """
@@ -264,10 +265,10 @@ def plot_reconstruction_examples(original_curves, fpca_results, n_examples=6, fi
         axes[i].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('outputs/fpca_reconstruction_examples.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'fpca_reconstruction_examples.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
-def plot_reconstruction_errors(original_curves, fpca_results, max_components=10, figsize=(12, 8)):
+def plot_reconstruction_errors(original_curves, fpca_results, max_components=10, figsize=(12, 8), output_dir="outputs"):
     """
     Plot reconstruction errors as a function of number of components.
     """
@@ -317,12 +318,12 @@ def plot_reconstruction_errors(original_curves, fpca_results, max_components=10,
     axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('outputs/fpca_reconstruction_errors.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'fpca_reconstruction_errors.png'), dpi=300, bbox_inches='tight')
     plt.show()
     
     return errors
 
-def plot_score_distributions(fpca_results, n_components=3, figsize=(15, 10)):
+def plot_score_distributions(fpca_results, n_components=3, figsize=(15, 10), output_dir="outputs"):
     """
     Plot distributions of the first n principal component scores.
     """
@@ -364,10 +365,10 @@ def plot_score_distributions(fpca_results, n_components=3, figsize=(15, 10)):
         axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('outputs/fpca_scores.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'fpca_scores.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
-def generate_fpca_report(fpca_results, original_curves, errors, param_names):
+def generate_fpca_report(fpca_results, original_curves, errors, param_names, output_dir="outputs"):
     """
     Generate a comprehensive FPCA report.
     """
@@ -420,7 +421,7 @@ def generate_fpca_report(fpca_results, original_curves, errors, param_names):
     report.append("")
     
     # Save report
-    with open('outputs/fpca_report.txt', 'w') as f:
+    with open(os.path.join(output_dir, 'fpca_report.txt'), 'w') as f:
         f.write('\n'.join(report))
     
     # Print to console
@@ -430,26 +431,58 @@ def main():
     """
     Main function to run FPCA analysis.
     """
-    print("Starting FPCA analysis...")
+    # Set up command line argument parsing
+    parser = argparse.ArgumentParser(
+        description='Analyze Functional PCA on training data',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Use default Geballe data
+  python analyze_fpca.py
+  
+  # Use Edmund data
+  python analyze_fpca.py --input outputs/edmund1/uq_batch_results.npz --output-dir outputs/edmund1
+  
+  # Use custom data with different number of components
+  python analyze_fpca.py --input my_data.npz --output-dir my_outputs --components 6
+        """
+    )
+    
+    parser.add_argument('--input', type=str, default='outputs/uq_batch_results.npz',
+                       help='Path to the input .npz file (default: outputs/uq_batch_results.npz)')
+    parser.add_argument('--output-dir', type=str, default='outputs',
+                       help='Output directory for results (default: outputs)')
+    parser.add_argument('--components', type=int, default=4,
+                       help='Number of components to compute (default: 4)')
+    
+    args = parser.parse_args()
+    
+    print(f"Starting FPCA analysis...")
+    print(f"Input file: {args.input}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Number of components: {args.components}")
+    
+    # Ensure output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
     
     # Load and prepare data
-    curves, params, param_names = load_and_prepare_data()
+    curves, params, param_names = load_and_prepare_data(args.input)
     
     # Compute FPCA
-    fpca_results = compute_fpca(curves, n_components=4)
+    fpca_results = compute_fpca(curves, n_components=args.components)
     
-    # Generate visualizations
+    # Generate visualizations with custom output directory
     print("\nGenerating visualizations...")
-    plot_eigenfunctions(fpca_results)
-    plot_reconstruction_examples(curves, fpca_results)
-    errors = plot_reconstruction_errors(curves, fpca_results)
-    plot_score_distributions(fpca_results)
+    plot_eigenfunctions(fpca_results, output_dir=args.output_dir)
+    plot_reconstruction_examples(curves, fpca_results, output_dir=args.output_dir)
+    errors = plot_reconstruction_errors(curves, fpca_results, output_dir=args.output_dir)
+    plot_score_distributions(fpca_results, output_dir=args.output_dir)
     
     # Generate report
     print("\nGenerating FPCA report...")
-    generate_fpca_report(fpca_results, curves, errors, param_names)
+    generate_fpca_report(fpca_results, curves, errors, param_names, output_dir=args.output_dir)
     
-    print("\nFPCA analysis completed! Check the 'outputs' directory for:")
+    print(f"\nFPCA analysis completed! Check the '{args.output_dir}' directory for:")
     print("- fpca_eigenfunctions.png: Eigenfunctions and variance plots")
     print("- fpca_reconstruction_examples.png: Original vs reconstructed curves")
     print("- fpca_reconstruction_errors.png: Error metrics vs components")

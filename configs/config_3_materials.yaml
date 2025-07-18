@@ -42,10 +42,16 @@ heating:
   fwhm: 13.2e-06     # full width at half maximum (m)
   file: "data/experimental/geballe_heat_data.csv"
   
+  # Savitzky-Golay smoothing configuration
+  smoothing:
+    enabled: true
+    window_length: 11  # Must be odd number, smaller than data length
+    polyorder: 3       # Polynomial order (typically 2-4)
+  
   # Boundary condition configuration
   bc:
     type: "gaussian"
-    location: "inner"
+    location: "zmin"
     material: "p_ins"  # Specify which material to apply heating to
     center: 0.0
 

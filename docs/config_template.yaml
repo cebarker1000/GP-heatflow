@@ -38,7 +38,7 @@ heating:
   # Boundary condition configuration
   bc:
     type: "gaussian"
-    location: "inner"
+    location: "zmin"      # "zmin" or "zmax"
     material: "material1"  # Specify which material to apply heating to
     center: 0.0
 
