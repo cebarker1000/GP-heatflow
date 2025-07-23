@@ -17,7 +17,7 @@ parameters:
   rho_cv_sample:
     type: normal
     center: 7072500
-    sigma: 70725
+    sigma: 707250
     description: "Sample volumetric heat capacity"
     units: "J/(m³·K)"
 
@@ -52,7 +52,7 @@ parameters:
   k_sample:
     type: uniform
     low: 20.0
-    high: 80.0
+    high: 100.0
     description: "Sample thermal conductivity"
     units: "W/(m·K)"
     
@@ -101,9 +101,9 @@ sampling:
 # Output configuration
 output:
   save_samples: true
-  samples_file: "outputs/edmund2/initial_train_set.csv"
-  results_file: "outputs/edmund2/uq_batch_results.npz"
-  fpca_model_file: "outputs/edmund2/fpca_model.npz"
-  fpca_training_file: "outputs/edmund2/training_data_fpca.npz"
-  distribution_plot_file: "outputs/edmund2/parameter_distributions.png"
-  correlation_plot_file: "outputs/edmund2/parameter_correlations.png"  
+  samples_file: "outputs/edmund4/initial_train_set.csv"
+  results_file: "outputs/edmund4/uq_batch_results.npz"
+  fpca_model_file: "outputs/edmund4/fpca_model.npz"
+  fpca_training_file: "outputs/edmund4/training_data_fpca.npz"
+  distribution_plot_file: "outputs/edmund4/parameter_distributions.png"
+  correlation_plot_file: "outputs/edmund4/parameter_correlations.png"  

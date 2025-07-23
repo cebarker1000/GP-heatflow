@@ -459,6 +459,16 @@ def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins
     )
     print(f"Train / test split: {len(X_train)} train | {len(X_test)} test (fraction {test_fraction})")
 
+    # To calculate the R² on the full curves, we need the original curves for the test set.
+    # We can reconstruct them from the y_test (FPCA scores) and the FPCA model.
+    fpca_model = load_fpca_model(fpca_model_path)
+    
+    # Reconstruct the original curves for the test set
+    true_curves_test = np.array([reconstruct_curve_from_fpca(coeffs, fpca_model) for coeffs in y_test])
+
+    # Get the mean curve from the FPCA model
+    mean_curve = fpca_model['mean_curve']
+
     # Load FPCA model
     print("\n2. Loading FPCA model...")
     fpca_model = load_fpca_model(fpca_model_path)
@@ -527,6 +537,21 @@ def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins
         num_steps=fpca_model.get('num_steps', 50)  # Get from fpca_model or default
     )
 
+    # Predict curves for the test set
+    predicted_curves_test, _, _, _ = surrogate.predict_temperature_curves(X_test)
+    
+    # Calculate the overall R² score on the full curves
+    # We need to flatten the arrays to treat all time points as independent samples for the R² calculation
+    r2_full_curves = r2_score(true_curves_test.flatten(), predicted_curves_test.flatten())
+    print(f"\nOverall R² score on full test curves: {r2_full_curves:.6f}")
+
+    # Calculate R² on residuals (subtracting the mean curve)
+    true_residuals = true_curves_test - mean_curve
+    predicted_residuals = predicted_curves_test - mean_curve
+    r2_residuals = r2_score(true_residuals.flatten(), predicted_residuals.flatten())
+    print(f"Overall R² score on residuals (mean-subtracted): {r2_residuals:.6f}")
+
+
     # Save the model
     print("\n6. Saving surrogate model...")
     surrogate.save_model(output_path)
@@ -544,6 +569,8 @@ def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins
         print(f"  PC{i+1}: Train R²={tr['r2']:.4f}, RMSE={tr['rmse']:.4e} | "
               f"Test R²={te['r2']:.4f}, RMSE={te['rmse']:.4e}")
 
+    print(f"\nOverall R² on reconstructed test curves: {r2_full_curves:.6f}")
+    print(f"Overall R² on residuals (mean-subtracted): {r2_residuals:.6f}")
 
 
     return surrogate, training_metrics, test_metrics

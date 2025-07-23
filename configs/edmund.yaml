@@ -5,23 +5,23 @@
 mats:
   p_ins:
     r: 20e-6 
-    z: 4e-06 
+    z: 3.999e-06 
     rho_cv: 2621310   
-    k: 19.4
+    k: 32.1
     mesh: 0.05e-6 
   
   sample:
     r: 20e-6
     z: 2.9e-06
-    rho_cv: 71964000
-    k: 33.3
+    rho_cv: 6.97e6
+    k: 41.9
     mesh: 0.04e-6
 
   o_ins:  
     r: 20e-6
-    z: 4.2e-06
+    z: 4.236e-06
     rho_cv: 2621310
-    k: 19.4
+    k: 32.1
     mesh: 0.05e-6
 
 # Material layout (agnostic to material names)
@@ -36,9 +36,8 @@ timing:
 # Heating configuration
 heating:
   ic_temp: 300.0   # initial temperature (K)
-  fwhm: 12.0e-06     # full width at half maximum (m)
-  file: "data/experimental/edmund_71Gpa_run2.csv"
-  ma_window_pts: 10
+  fwhm: 11.8e-06     # full width at half maximum (m)
+  file: "data/experimental/edmund_71Gpa_run1.csv"
   
   # Savitzky-Golay smoothing configuration
   smoothing:

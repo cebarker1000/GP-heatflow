@@ -193,12 +193,11 @@ def load_experimental_data(data_path="data/experimental/edmund_71Gpa_run1.csv"):
 def plot_comparison(fem_curve, fem_time, surrogate_curve, curve_uncert, surrogate_time,
                    exp_curve, exp_time, param_names, param_values):
     """
-    Create comparison plots.
+    Create comparison plots with main comparison and residuals.
     """
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
     
-    # Plot 1: Direct comparison of curves
-    ax1 = axes[0, 0]
+    # Plot 1: Main comparison of all curves (Surrogate vs FEM vs Experimental)
     if fem_curve is not None:
         ax1.plot(fem_time * 1e6, fem_curve, 'b-', linewidth=2, label='FEM')
     if surrogate_curve is not None:
@@ -217,92 +216,35 @@ def plot_comparison(fem_curve, fem_time, surrogate_curve, curve_uncert, surrogat
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # Plot 2: Difference between FEM and Surrogate
-    ax2 = axes[0, 1]
-    if fem_curve is not None and surrogate_curve is not None:
-        # Interpolate surrogate to FEM time grid for comparison
+    # Plot 2: Residuals (FEM vs Experimental only)
+    if fem_curve is not None and exp_curve is not None:
+        # Interpolate FEM to experimental time grid for comparison
         from scipy.interpolate import interp1d
-        interp_func = interp1d(surrogate_time, surrogate_curve, kind='linear', 
-                              bounds_error=False, fill_value=(surrogate_curve[0], surrogate_curve[-1]))
-        surrogate_interp = interp_func(fem_time)
+        fem_interp_func = interp1d(fem_time, fem_curve, kind='linear', 
+                                 bounds_error=False, fill_value=(fem_curve[0], fem_curve[-1]))
+        fem_interp = fem_interp_func(exp_time)
         
-        difference = fem_curve - surrogate_interp
-        ax2.plot(fem_time * 1e6, difference, 'g-', linewidth=2)
+        # Calculate FEM vs Experimental residuals
+        fem_exp_residual = fem_interp - exp_curve
+        
+        # Plot FEM vs Experimental residual
+        ax2.plot(exp_time * 1e6, fem_exp_residual, 'b-', linewidth=2, label='FEM - Experimental')
+        
         ax2.set_xlabel('Time (μs)')
-        ax2.set_ylabel('FEM - Surrogate')
-        ax2.set_title('Difference (FEM - Surrogate)')
+        ax2.set_ylabel('Residuals')
+        ax2.set_title('Residuals (FEM - Experimental)')
+        ax2.legend()
         ax2.grid(True, alpha=0.3)
         
-        # Add statistics
-        rmse = np.sqrt(np.mean(difference**2))
-        max_diff = np.max(np.abs(difference))
-        ax2.text(0.05, 0.95, f'RMSE: {rmse:.6f}\nMax |Diff|: {max_diff:.6f}', 
-                transform=ax2.transAxes, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # Plot 3: Parameter values
-    ax3 = axes[1, 0]
-    param_names_short = [name.replace('_', '\n') for name in param_names]
-    bars = ax3.bar(range(len(param_values)), param_values)
-    ax3.set_xticks(range(len(param_values)))
-    ax3.set_xticklabels(param_names_short, rotation=45, ha='right')
-    ax3.set_ylabel('Parameter Value')
-    ax3.set_title('Parameter Values Used')
-    ax3.grid(True, alpha=0.3)
-    
-    # Add value labels on bars
-    for i, (bar, value) in enumerate(zip(bars, param_values)):
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height,
-                f'{value:.2e}', ha='center', va='bottom', fontsize=8)
-    
-    # Plot 4: Time domain comparison (if experimental data available)
-    ax4 = axes[1, 1]
-    if exp_curve is not None:
-        # Interpolate both models to experimental time grid
-        from scipy.interpolate import interp1d
+        # Add statistics to residuals plot
+        rmse_fem_exp = np.sqrt(np.mean(fem_exp_residual**2))
+        max_diff_fem_exp = np.max(np.abs(fem_exp_residual))
+        mean_diff_fem_exp = np.mean(fem_exp_residual)
         
-        if fem_curve is not None:
-            fem_interp_func = interp1d(fem_time, fem_curve, kind='linear', 
-                                     bounds_error=False, fill_value=(fem_curve[0], fem_curve[-1]))
-            fem_interp = fem_interp_func(exp_time)
-            ax4.plot(exp_time * 1e6, fem_interp, 'b-', linewidth=2, label='FEM')
+        stats_text = f'FEM vs Experimental:\nRMSE: {rmse_fem_exp:.6f}\nMax |Diff|: {max_diff_fem_exp:.6f}\nMean Diff: {mean_diff_fem_exp:.6f}'
         
-        if surrogate_curve is not None:
-            surr_interp_func = interp1d(surrogate_time, surrogate_curve, kind='linear', 
-                                      bounds_error=False, fill_value=(surrogate_curve[0], surrogate_curve[-1]))
-            surr_interp = surr_interp_func(exp_time)
-            ax4.plot(exp_time * 1e6, surr_interp, 'r--', linewidth=2, label='Surrogate')
-
-            # Interpolate uncertainty to experimental grid and plot band
-            if curve_uncert is not None:
-                uncert_interp_func = interp1d(surrogate_time, curve_uncert, kind='linear',
-                                              bounds_error=False, fill_value=(curve_uncert[0], curve_uncert[-1]))
-                uncert_interp = uncert_interp_func(exp_time)
-                ax4.fill_between(exp_time * 1e6,
-                                 surr_interp - uncert_interp,
-                                 surr_interp + uncert_interp,
-                                 color='red', alpha=0.2, zorder=1)
-        
-        ax4.plot(exp_time * 1e6, exp_curve, 'k-', linewidth=1, alpha=0.7, label='Experimental')
-        ax4.set_xlabel('Time (μs)')
-        ax4.set_ylabel('Normalized Temperature')
-        ax4.set_title('Comparison on Experimental Time Grid')
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-        
-        # Calculate RMSE vs experimental
-        if fem_curve is not None:
-            fem_rmse = np.sqrt(np.mean((fem_interp - exp_curve)**2))
-            ax4.text(0.05, 0.95, f'FEM RMSE vs Exp: {fem_rmse:.6f}', 
-                    transform=ax4.transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-        
-        if surrogate_curve is not None:
-            surr_rmse = np.sqrt(np.mean((surr_interp - exp_curve)**2))
-            ax4.text(0.05, 0.85, f'Surrogate RMSE vs Exp: {surr_rmse:.6f}', 
-                    transform=ax4.transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
+        ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8), fontsize=9)
     
     plt.tight_layout()
     plt.savefig("surrogate_vs_fem_comparison.png", dpi=300, bbox_inches='tight')
