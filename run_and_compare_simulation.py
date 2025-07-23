@@ -28,10 +28,10 @@ class SimulationComparer:
         # Surrogate
         self.surrogate = FullSurrogateModel.load_model(surrogate_model_path)
 
-        # Time grid (match training data – 50 points 0 .. 7.5e-6)
-        self.sim_t_final = 7.5e-6
-        self.sim_num_steps = 50
-        self.sim_time_grid = np.linspace(0, self.sim_t_final, self.sim_num_steps)
+        # The surrogate model now has the correct time grid
+        self.sim_time_grid = self.surrogate.time_grid
+        self.sim_t_final = self.surrogate.t_final
+        self.sim_num_steps = self.surrogate.num_steps
 
         # Experimental file (hard-coded as in original script)
         self.geballe_file = "data/experimental/geballe_heat_data.csv"

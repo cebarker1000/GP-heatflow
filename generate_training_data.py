@@ -38,6 +38,8 @@ Examples:
                        help='Path to the simulation configuration YAML file (default: configs/config_5_materials.yaml)')
     parser.add_argument('--output-dir', type=str, default='outputs',
                        help='Output directory for results (overrides config file setting)')
+    parser.add_argument('--rebuild-fpca-from', type=str, default=None,
+                       help='Path to a uq_batch_results.npz file to rebuild the FPCA model from, skipping simulations.')
     
     args = parser.parse_args()
     
@@ -66,6 +68,43 @@ Examples:
     
     print("LHS samples (physical space):")
     print(samples)
+    
+    # After generating LHS samples, augment with extreme boundary points
+    # ------------------------------------------------------------------
+    def _get_param_bounds(p):
+        """Return (low, high) bounds in physical space for a parameter definition."""
+        if p["type"] == "uniform":
+            return p["low"], p["high"]
+        elif p["type"] == "normal":
+            c, s = p["center"], p["sigma"]
+            return c - 3 * s, c + 3 * s  # ±3σ captures 99.7 % of the mass
+        elif p["type"] == "lognormal":
+            mu = np.log(p["center"])
+            sigma = p["sigma_log"]
+            return np.exp(mu - 3 * sigma), np.exp(mu + 3 * sigma)
+        else:
+            raise ValueError(f"Unknown parameter type: {p['type']}")
+
+    def _augment_with_boundaries(base_samples, p_defs, n_per_face: int = 3, random_state: int = 42):
+        """Augment base_samples with extreme points.
+
+        For each parameter we create `n_per_face` samples at the low bound and
+        `n_per_face` at the high bound.  For diversity the remaining coordinates
+        are copied from random LHS samples rather than the global mean.
+        """
+        rng = np.random.default_rng(random_state)
+        aug = []
+        for idx, p in enumerate(p_defs):
+            low, high = _get_param_bounds(p)
+            for _ in range(n_per_face):
+                template = base_samples[rng.integers(len(base_samples))].copy()
+                low_samp = template.copy();  low_samp[idx] = low
+                high_samp = template.copy(); high_samp[idx] = high
+                aug.extend([low_samp, high_samp])
+        return np.vstack([base_samples, np.array(aug)])
+
+    samples = _augment_with_boundaries(samples, param_defs, n_per_face=3, random_state=42)
+    print(f"Augmented samples with boundary points -> new total: {len(samples)}")
     
     # Determine output paths - use distributions file paths, but allow command-line override
     if args.output_dir != 'outputs':  # If user specified a custom output directory
@@ -108,127 +147,147 @@ Examples:
     print("="*60)
     plot_parameter_correlations(samples, param_defs, output_dir=os.path.dirname(correlation_plot_file))
     
-    # Run batch simulations
-    print("\nRunning batch simulations...")
-    print(f"Running {len(samples)} simulations...")
-    
-    # Timing variables
-    start_time = time.time()
-    simulation_times = []
-    
-    # Add progress callback with timing
-    def progress_callback(current, total):
-        if current == 0:
-            # First simulation starting
-            print(f"Starting simulation {current + 1}/{total}...")
+    # This block will be skipped if --rebuild-fpca-from is used
+    if not args.rebuild_fpca_from:
+        # Run batch simulations
+        print("\nRunning batch simulations...")
+        print(f"Running {len(samples)} simulations...")
+        
+        # Timing variables
+        start_time = time.time()
+        simulation_times = []
+        
+        # Add progress callback with timing
+        def progress_callback(current, total):
+            if current == 0:
+                # First simulation starting
+                print(f"Starting simulation {current + 1}/{total}...")
+            else:
+                # Calculate time for previous simulation
+                sim_time = time.time() - start_time - sum(simulation_times)
+                simulation_times.append(sim_time)
+                
+                # Calculate average time per simulation
+                avg_time = np.mean(simulation_times)
+                
+                # Calculate remaining simulations and predicted time
+                remaining_sims = total - current
+                predicted_remaining = avg_time * remaining_sims
+                
+                # Format times nicely
+                sim_time_str = str(timedelta(seconds=int(sim_time)))
+                avg_time_str = str(timedelta(seconds=int(avg_time)))
+                remaining_str = str(timedelta(seconds=int(predicted_remaining)))
+                
+                print(f"Simulation {current}/{total} completed in {sim_time_str} (avg: {avg_time_str})")
+                print(f"Starting simulation {current + 1}/{total}... (est. remaining: {remaining_str})")
+        
+        # Pass the simulation config file to the batch simulation function
+        results = run_batch_simulations(
+            samples, param_defs, PARAM_MAPPING, 
+            suppress_print=True, 
+            progress_callback=progress_callback,
+            config_path=args.config  # Pass the simulation config file
+        )
+        
+        # Final timing summary
+        total_time = time.time() - start_time
+        total_time_str = str(timedelta(seconds=int(total_time)))
+        avg_time = np.mean(simulation_times) if simulation_times else 0
+        avg_time_str = str(timedelta(seconds=int(avg_time)))
+        
+        print(f"\nAll simulations completed!")
+        print(f"Total time: {total_time_str}")
+        print(f"Average time per simulation: {avg_time_str}")
+        
+        # Count successful vs failed simulations
+        successful = sum(1 for r in results if 'error' not in r)
+        failed = len(results) - successful
+        print(f"\nSimulation Summary:")
+        print(f"Successful: {successful}")
+        print(f"Failed: {failed}")
+        
+        if successful > 0:
+            # Save results
+            save_batch_results(results, param_defs, output_file=results_file)
         else:
-            # Calculate time for previous simulation
-            sim_time = time.time() - start_time - sum(simulation_times)
-            simulation_times.append(sim_time)
-            
-            # Calculate average time per simulation
-            avg_time = np.mean(simulation_times)
-            
-            # Calculate remaining simulations and predicted time
-            remaining_sims = total - current
-            predicted_remaining = avg_time * remaining_sims
-            
-            # Format times nicely
-            sim_time_str = str(timedelta(seconds=int(sim_time)))
-            avg_time_str = str(timedelta(seconds=int(avg_time)))
-            remaining_str = str(timedelta(seconds=int(predicted_remaining)))
-            
-            print(f"Simulation {current}/{total} completed in {sim_time_str} (avg: {avg_time_str})")
-            print(f"Starting simulation {current + 1}/{total}... (est. remaining: {remaining_str})")
+            print("No successful simulations to save!")
+            return # Exit if no results
     
-    # Pass the simulation config file to the batch simulation function
-    results = run_batch_simulations(
-        samples, param_defs, PARAM_MAPPING, 
-        suppress_print=True, 
-        progress_callback=progress_callback,
-        config_path=args.config  # Pass the simulation config file
-    )
-    
-    # Final timing summary
-    total_time = time.time() - start_time
-    total_time_str = str(timedelta(seconds=int(total_time)))
-    avg_time = np.mean(simulation_times) if simulation_times else 0
-    avg_time_str = str(timedelta(seconds=int(avg_time)))
-    
-    print(f"\nAll simulations completed!")
-    print(f"Total time: {total_time_str}")
-    print(f"Average time per simulation: {avg_time_str}")
-    
-    # Count successful vs failed simulations
-    successful = sum(1 for r in results if 'error' not in r)
-    failed = len(results) - successful
-    print(f"\nSimulation Summary:")
-    print(f"Successful: {successful}")
-    print(f"Failed: {failed}")
-    
-    if successful > 0:
-        # Save results
-        save_batch_results(results, param_defs, output_file=results_file)
+    # If rebuilding, override the results_file path to the user-provided one
+    if args.rebuild_fpca_from:
+        print(f"\n--rebuild-fpca-from specified. Loading results from: {args.rebuild_fpca_from}")
+        print("Skipping batch simulations and using existing data.")
+        results_file = args.rebuild_fpca_from
         
-        # Load and verify the saved data
-        print("\nVerifying saved data...")
+    # Step 2: Build FPCA model and recast training data
+    print("\n" + "="*60)
+    print("STEP 2: BUILDING FPCA MODEL AND RECASTING DATA")
+    print("="*60)
+    
+    # Load and verify the saved data
+    print("\nVerifying saved data...")
+    try:
         loaded_data = load_batch_results(results_file)
-        print(f"Loaded data keys: {list(loaded_data.keys())}")
-        print(f"Oside curves shape: {loaded_data['oside_curves'].shape}")
-        print(f"Parameters shape: {loaded_data['parameters'].shape}")
-        print(f"Parameter names: {loaded_data['parameter_names']}")
+    except FileNotFoundError:
+        print(f"Error: Results file not found at {results_file}")
+        return
         
-        # Show some statistics about the oside curves
-        oside_curves = loaded_data['oside_curves']
-        valid_curves = oside_curves[~np.isnan(oside_curves).any(axis=1)]
-        print(f"Valid oside curves: {len(valid_curves)}")
-        if len(valid_curves) > 0:
-            print(f"Oside curve statistics:")
-            print(f"  Mean max value: {np.mean(np.max(valid_curves, axis=1)):.3f}")
-            print(f"  Mean min value: {np.mean(np.min(valid_curves, axis=1)):.3f}")
-            print(f"  Mean range: {np.mean(np.max(valid_curves, axis=1) - np.min(valid_curves, axis=1)):.3f}")
+    print(f"Loaded data keys: {list(loaded_data.keys())}")
+    print(f"Oside curves shape: {loaded_data['oside_curves'].shape}")
+    print(f"Parameters shape: {loaded_data['parameters'].shape}")
+    print(f"Parameter names: {loaded_data['parameter_names']}")
+    
+    # Show some statistics about the oside curves
+    oside_curves = loaded_data['oside_curves']
+    valid_curves = oside_curves[~np.isnan(oside_curves).any(axis=1)]
+    print(f"Valid oside curves: {len(valid_curves)}")
+    if len(valid_curves) > 0:
+        print(f"Oside curve statistics:")
+        print(f"  Mean max value: {np.mean(np.max(valid_curves, axis=1)):.3f}")
+        print(f"  Mean min value: {np.mean(np.min(valid_curves, axis=1)):.3f}")
+        print(f"  Mean range: {np.mean(np.max(valid_curves, axis=1) - np.min(valid_curves, axis=1)):.3f}")
+    
+    # Build FPCA model
+    print("\nBuilding FPCA model...")
+    fpca_model = build_fpca_model(
+        input_file=results_file,
+        min_components=4,
+        variance_threshold=0.99
+    )
         
-        # Step 2: Build FPCA model and recast training data
-        print("\n" + "="*60)
-        print("STEP 2: BUILDING FPCA MODEL AND RECASTING DATA")
-        print("="*60)
-        
-        # Build FPCA model
-        print("\nBuilding FPCA model...")
-        fpca_model = build_fpca_model(
-            input_file=results_file,
-            min_components=4,
-            variance_threshold=0.99
-        )
-        
-        # Save FPCA model
-        print("\nSaving FPCA model...")
-        save_fpca_model(fpca_model, fpca_model_file)
-        
-        # Recast training data to FPCA space
-        print("\nRecasting training data to FPCA space...")
-        recast_data = recast_training_data_to_fpca(
-            input_file=results_file,
-            fpca_model=fpca_model,
-            output_file=fpca_training_file
-        )
-        
-        print(f"\nFPCA Analysis Summary:")
-        print(f"  Number of components: {fpca_model['n_components']}")
-        print(f"  Explained variance: {fpca_model['cumulative_variance'][-1]:.4f}")
-        print(f"  Training data shape: {recast_data['parameters'].shape}")
-        print(f"  FPCA scores shape: {recast_data['fpca_scores'].shape}")
-        
-        # Show FPCA score statistics
-        fpca_scores = recast_data['fpca_scores']
-        print(f"\nFPCA Score Statistics:")
-        for i in range(fpca_model['n_components']):
-            scores_i = fpca_scores[:, i]
-            print(f"  PC{i+1}: mean={np.mean(scores_i):.4f}, std={np.std(scores_i):.4f}")
-        
-    else:
-        print("No successful simulations to save!")
+    # Add timing info to FPCA model for the new surrogate model
+    import yaml
+    with open(args.config, 'r') as f:
+        sim_config = yaml.safe_load(f)
+    fpca_model['t_final'] = sim_config['timing']['t_final']
+    fpca_model['num_steps'] = sim_config['timing']['num_steps']
 
+    # Save FPCA model
+    print("\nSaving FPCA model...")
+    save_fpca_model(fpca_model, fpca_model_file)
+        
+    # Recast training data to FPCA space
+    print("\nRecasting training data to FPCA space...")
+    recast_data = recast_training_data_to_fpca(
+        input_file=results_file,
+        fpca_model=fpca_model,
+        output_file=fpca_training_file
+    )
+        
+    print(f"\nFPCA Analysis Summary:")
+    print(f"  Number of components: {fpca_model['n_components']}")
+    print(f"  Explained variance: {fpca_model['cumulative_variance'][-1]:.4f}")
+    print(f"  Training data shape: {recast_data['parameters'].shape}")
+    print(f"  FPCA scores shape: {recast_data['fpca_scores'].shape}")
+        
+    # Show FPCA score statistics
+    fpca_scores = recast_data['fpca_scores']
+    print(f"\nFPCA Score Statistics:")
+    for i in range(fpca_model['n_components']):
+        scores_i = fpca_scores[:, i]
+        print(f"  PC{i+1}: mean={np.mean(scores_i):.4f}, std={np.std(scores_i):.4f}")
+        
 
 def plot_parameter_distributions(samples, param_defs, output_dir="outputs"):
     """

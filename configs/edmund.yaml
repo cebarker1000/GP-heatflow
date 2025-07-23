@@ -7,21 +7,21 @@ mats:
     r: 20e-6 
     z: 4e-06 
     rho_cv: 2621310   
-    k: 14        
+    k: 19.4
     mesh: 0.05e-6 
-
+  
   sample:
     r: 20e-6
     z: 2.9e-06
-    rho_cv: 7072500
-    k: 51
+    rho_cv: 71964000
+    k: 33.3
     mesh: 0.04e-6
-  
-  o_ins:
+
+  o_ins:  
     r: 20e-6
     z: 4.2e-06
     rho_cv: 2621310
-    k: 14
+    k: 19.4
     mesh: 0.05e-6
 
 # Material layout (agnostic to material names)
@@ -36,8 +36,8 @@ timing:
 # Heating configuration
 heating:
   ic_temp: 300.0   # initial temperature (K)
-  fwhm: 7.0e-06     # full width at half maximum (m)
-  file: "data/experimental/edmund_71Gpa_run1.csv"
+  fwhm: 12.0e-06     # full width at half maximum (m)
+  file: "data/experimental/edmund_71Gpa_run2.csv"
   ma_window_pts: 10
   
   # Savitzky-Golay smoothing configuration
@@ -49,8 +49,8 @@ heating:
   # Boundary condition configuration
   bc:
     type: "gaussian"
-    location: "zmax"
-    material: "p_ins"  # Specify which material to apply heating to
+    location: "zmin"
+    material: "sample"  # Specify which material to apply heating to
     center: 0.0
 
 # Boundary conditions (agnostic to material names)
@@ -87,10 +87,11 @@ output:
         position: "heating_location"  # Automatically place at heating BC location
       
       oside:
-        material: "o_ins"
+        material: "sample"
         position:
           r: 0.0
-          percentage: 0.0
+          percentage: 1.0
+      
   
   # Analysis and plotting options
   analysis:

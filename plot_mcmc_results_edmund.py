@@ -436,6 +436,194 @@ def plot_likelihood_values(samples_full, log_pdf_values, param_names):
     print(f"  Min:  {np.min(log_pdf_flat):.3f}")
     print(f"  Max:  {np.max(log_pdf_flat):.3f}")
 
+def plot_likelihood_analysis(samples_full, param_names, param_defs):
+    """
+    Create likelihood analysis plots by fixing non-k parameters and one k parameter,
+    then plotting likelihood over the range of the remaining k parameter.
+    
+    Parameters:
+    -----------
+    samples_full : np.ndarray
+        Full parameter samples
+    param_names : list
+        Names of all parameters
+    param_defs : list
+        Parameter definitions from config
+    """
+    print("\n" + "="*60)
+    print("LIKELIHOOD ANALYSIS - K PARAMETER PROFILES")
+    print("="*60)
+    
+    # Load experimental data and surrogate model
+    try:
+        # Load experimental data
+        data = pd.read_csv("data/experimental/edmund_71Gpa_run1.csv")
+        oside_data = data['oside'].values
+        y_obs = (oside_data - oside_data[0]) / (data['temp'].max() - data['temp'].min())
+        exp_time = data['time'].values
+        
+        # Interpolate to surrogate grid
+        from scipy.interpolate import interp1d
+        sim_t_final = 8.5e-6  # seconds (from Edmund config)
+        sim_num_steps = 50    # from FPCA model (eigenfunctions shape)
+        surrogate_time_grid = np.linspace(0, sim_t_final, sim_num_steps)
+        interp_func = interp1d(exp_time, y_obs, kind='linear', 
+                               bounds_error=False, fill_value=(y_obs[0], y_obs[-1]))
+        interpolated_data = interp_func(surrogate_time_grid)
+        
+        # Load surrogate model
+        from train_surrogate_models import FullSurrogateModel
+        surrogate = FullSurrogateModel.load_model("outputs/edmund1/full_surrogate_model.pkl")
+        
+        print("Successfully loaded experimental data and surrogate model")
+        
+    except Exception as e:
+        print(f"Error loading data or surrogate model: {e}")
+        print("Skipping likelihood analysis plots")
+        return
+    
+    # Identify parameter types
+    k_param_names = ['k_sample', 'k_ins']
+    nuisance_param_names = [name for name in param_names if name not in k_param_names]
+    
+    # Get posterior means for all parameters from MCMC results
+    if len(samples_full.shape) == 3:
+        samples_flat = samples_full.reshape(-1, samples_full.shape[2])
+    else:
+        samples_flat = samples_full
+    
+    posterior_means = {}
+    for i, name in enumerate(param_names):
+        posterior_means[name] = np.mean(samples_flat[:, i])
+    
+    print(f"Posterior means for fixed parameters:")
+    for name, value in posterior_means.items():
+        print(f"  {name}: {value:.3e}")
+    
+    # Create likelihood analysis plots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Plot 1: Fix k_ins, vary k_sample
+    print(f"\nAnalyzing likelihood profile for k_sample (k_ins fixed at {posterior_means['k_ins']:.1f})")
+    
+    # Define k_sample range (uniform distribution bounds)
+    k_sample_range = np.linspace(25.0, 100.0, 100)  # k_sample uniform range
+    likelihood_k_sample = []
+    
+    for k_sample_val in k_sample_range:
+        # Create parameter vector with k_sample varying, others fixed
+        params = np.array([posterior_means[name] for name in param_names])
+        params[param_names.index('k_sample')] = k_sample_val
+        
+        # Compute likelihood
+        try:
+            y_pred, _, _, curve_uncert = surrogate.predict_temperature_curves(params.reshape(1, -1))
+            
+            # Use same likelihood calculation as in MCMC
+            SENSOR_VARIANCE = 0.0012
+            INCLUDE_SURROGATE_UNCERT = True
+            
+            if INCLUDE_SURROGATE_UNCERT:
+                sigma2 = SENSOR_VARIANCE + curve_uncert**2
+            else:
+                sigma2 = SENSOR_VARIANCE
+            
+            # Gaussian log-likelihood
+            resid = y_pred - interpolated_data
+            ll = -0.5 * np.sum(resid**2 / sigma2 + np.log(2 * np.pi * sigma2))
+            likelihood_k_sample.append(ll)
+            
+        except Exception as e:
+            print(f"Error computing likelihood for k_sample={k_sample_val}: {e}")
+            likelihood_k_sample.append(np.nan)
+    
+    # Plot k_sample likelihood profile
+    ax1.plot(k_sample_range, likelihood_k_sample, 'b-', linewidth=2, label='Log-likelihood')
+    ax1.set_xlabel('k_sample (W/(m·K))')
+    ax1.set_ylabel('Log-likelihood')
+    ax1.set_title(f'Likelihood Profile: k_sample\n(k_ins fixed at {posterior_means["k_ins"]:.1f} W/(m·K))')
+    ax1.grid(True, alpha=0.3)
+    
+    # Add posterior mean and credible interval from MCMC results
+    k_sample_samples = samples_flat[:, param_names.index('k_sample')]
+    k_sample_mean = np.mean(k_sample_samples)
+    k_sample_ci_low = np.percentile(k_sample_samples, 2.5)
+    k_sample_ci_high = np.percentile(k_sample_samples, 97.5)
+    
+    ax1.axvline(k_sample_mean, color='red', linestyle='--', label=f'Posterior mean: {k_sample_mean:.1f}')
+    ax1.axvline(k_sample_ci_low, color='orange', linestyle=':', label=f'95% CI: [{k_sample_ci_low:.1f}, {k_sample_ci_high:.1f}]')
+    ax1.axvline(k_sample_ci_high, color='orange', linestyle=':')
+    ax1.legend()
+    
+    # Plot 2: Fix k_sample, vary k_ins
+    print(f"Analyzing likelihood profile for k_ins (k_sample fixed at {posterior_means['k_sample']:.1f})")
+    
+    # Define k_ins range (around posterior mean)
+    k_ins_mean = posterior_means['k_ins']
+    k_ins_std = param_defs[param_names.index('k_ins')]['sigma']
+    k_ins_range = np.linspace(k_ins_mean - 3*k_ins_std, k_ins_mean + 3*k_ins_std, 100)
+    likelihood_k_ins = []
+    
+    for k_ins_val in k_ins_range:
+        # Create parameter vector with k_ins varying, others fixed
+        params = np.array([posterior_means[name] for name in param_names])
+        params[param_names.index('k_ins')] = k_ins_val
+        
+        # Compute likelihood
+        try:
+            y_pred, _, _, curve_uncert = surrogate.predict_temperature_curves(params.reshape(1, -1))
+            
+            if INCLUDE_SURROGATE_UNCERT:
+                sigma2 = SENSOR_VARIANCE + curve_uncert**2
+            else:
+                sigma2 = SENSOR_VARIANCE
+            
+            # Gaussian log-likelihood
+            resid = y_pred - interpolated_data
+            ll = -0.5 * np.sum(resid**2 / sigma2 + np.log(2 * np.pi * sigma2))
+            likelihood_k_ins.append(ll)
+            
+        except Exception as e:
+            print(f"Error computing likelihood for k_ins={k_ins_val}: {e}")
+            likelihood_k_ins.append(np.nan)
+    
+    # Plot k_ins likelihood profile
+    ax2.plot(k_ins_range, likelihood_k_ins, 'g-', linewidth=2, label='Log-likelihood')
+    ax2.set_xlabel('k_ins (W/(m·K))')
+    ax2.set_ylabel('Log-likelihood')
+    ax2.set_title(f'Likelihood Profile: k_ins\n(k_sample fixed at {posterior_means["k_sample"]:.1f} W/(m·K))')
+    ax2.grid(True, alpha=0.3)
+    
+    # Add posterior mean and credible interval from MCMC results
+    k_ins_samples = samples_flat[:, param_names.index('k_ins')]
+    k_ins_mean = np.mean(k_ins_samples)
+    k_ins_ci_low = np.percentile(k_ins_samples, 2.5)
+    k_ins_ci_high = np.percentile(k_ins_samples, 97.5)
+    
+    ax2.axvline(k_ins_mean, color='red', linestyle='--', label=f'Posterior mean: {k_ins_mean:.1f}')
+    ax2.axvline(k_ins_ci_low, color='orange', linestyle=':', label=f'95% CI: [{k_ins_ci_low:.1f}, {k_ins_ci_high:.1f}]')
+    ax2.axvline(k_ins_ci_high, color='orange', linestyle=':')
+    ax2.legend()
+    
+    plt.tight_layout()
+    plt.savefig("likelihood_analysis_k_params_edmund.png", dpi=300, bbox_inches="tight")
+    print("Likelihood analysis plots saved to likelihood_analysis_k_params_edmund.png")
+    plt.show()
+    
+    # Print summary statistics
+    print(f"\nLikelihood Analysis Summary:")
+    print(f"k_sample profile:")
+    print(f"  Range: {k_sample_range[0]:.1f} to {k_sample_range[-1]:.1f} W/(m·K)")
+    print(f"  Max likelihood at: {k_sample_range[np.nanargmax(likelihood_k_sample)]:.1f} W/(m·K)")
+    print(f"  Posterior mean: {k_sample_mean:.1f} W/(m·K)")
+    print(f"  Posterior 95% CI: [{k_sample_ci_low:.1f}, {k_sample_ci_high:.1f}] W/(m·K)")
+    
+    print(f"\nk_ins profile:")
+    print(f"  Range: {k_ins_range[0]:.1f} to {k_ins_range[-1]:.1f} W/(m·K)")
+    print(f"  Max likelihood at: {k_ins_range[np.nanargmax(likelihood_k_ins)]:.1f} W/(m·K)")
+    print(f"  Posterior mean: {k_ins_mean:.1f} W/(m·K)")
+    print(f"  Posterior 95% CI: [{k_ins_ci_low:.1f}, {k_ins_ci_high:.1f}] W/(m·K)")
+
 def load_mcmc_results():
     """
     Load Edmund MCMC results from saved .npz file.
@@ -492,7 +680,10 @@ def create_corner_plot(data, labels, title, filename):
             title_fmt=".2f",
             title_kwargs={"fontsize": 10}
         )
-        fig.suptitle(title, fontsize=14, y=0.95)
+        # Move title higher and add proper spacing to prevent overlap
+        fig.suptitle(title, fontsize=14, y=1.0)
+        # Adjust subplot parameters to create more space for title
+        plt.subplots_adjust(top=0.92, bottom=0.08, left=0.08, right=0.95)
         fig.savefig(filename, dpi=300, bbox_inches="tight")
         print(f"Corner plot saved to {filename}")
         plt.show()
@@ -502,9 +693,10 @@ def create_corner_plot(data, labels, title, filename):
         df = pd.DataFrame(data_flat, columns=labels)
         g = sns.pairplot(df, corner=True, diag_kind="kde", 
                         plot_kws={"s": 5, "alpha": 0.4})
-        g.fig.suptitle(title, fontsize=14)
+        g.fig.suptitle(title, fontsize=14, y=1.0)
         g.fig.tight_layout()
-        g.fig.subplots_adjust(top=0.95)
+        # Add extra space for title
+        g.fig.subplots_adjust(top=0.92)
         g.fig.savefig(filename, dpi=300, bbox_inches="tight")
         print(f"Pair plot saved to {filename} (corner library not installed)")
         plt.show()
@@ -594,7 +786,7 @@ def plot_trace_plots(samples_full, param_names, n_walkers=44):
     if n_rows == 1:
         axes = axes.reshape(1, -1)
     
-    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray'][:n_params]
+    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'cyan', 'magenta', 'yellow', 'black'][:n_params]
     
     for param_idx in range(n_params):
         row = param_idx // n_cols
@@ -713,8 +905,41 @@ def main():
     full_labels = [f"${name}$" if name.startswith('k_') else name for name in param_names]
     create_corner_plot(samples_full, full_labels, "All Parameters Posterior (Edmund)", "corner_plot_edmund.png")
     
+    # K-only corner plot for thermal conductivity parameters
+    k_param_names = ['k_sample', 'k_ins']
+    k_indices = [param_names.index(name) for name in k_param_names]
+    
+    # Extract k parameters from samples
+    if len(samples_full.shape) == 3:
+        # (n_samples, n_chains, n_dimensions) -> (n_samples * n_chains, n_k_params)
+        k_samples = samples_full[:, :, k_indices].reshape(-1, len(k_indices))
+    else:
+        # (n_samples, n_dimensions) -> (n_samples, n_k_params)
+        k_samples = samples_full[:, k_indices]
+    
+    k_labels = [f"${name}$" for name in k_param_names]
+    create_corner_plot(k_samples, k_labels, "Thermal Conductivity Parameters Posterior (Edmund)", "corner_plot_k_params_edmund.png")
+    
+    # Print k-parameter specific statistics
+    print("\n" + "="*60)
+    print("THERMAL CONDUCTIVITY PARAMETER STATISTICS")
+    print("="*60)
+    print(f"{'Parameter':<15} {'Posterior Mean':<15} {'Posterior Std':<15} {'95% CI':<20}")
+    print("-" * 70)
+    for i, name in enumerate(k_param_names):
+        samples_k = k_samples[:, i]
+        mean_val = samples_k.mean()
+        std_val = samples_k.std()
+        ci_low = np.percentile(samples_k, 2.5)
+        ci_high = np.percentile(samples_k, 97.5)
+        print(f"{name:<15} {mean_val:<15.3e} {std_val:<15.3e} [{ci_low:.3e}, {ci_high:.3e}]")
+    
     # Plot posterior vs prior distributions for all parameters
     plot_posterior_vs_prior(samples_flat, param_names, param_defs)
+    
+    # Create likelihood analysis plots for k parameters
+    print("\nCreating likelihood analysis plots for k parameters...")
+    plot_likelihood_analysis(samples_full, param_names, param_defs)
 
     print("\nAll Edmund plots completed!")
 

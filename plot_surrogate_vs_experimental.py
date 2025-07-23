@@ -32,10 +32,10 @@ class SurrogatePlotter:
         print("Loading surrogate model...")
         self.surrogate = FullSurrogateModel.load_model(surrogate_model_path)
         
-        # Simulation time grid (from config)
-        self.sim_t_final = 7.5e-6  # seconds
-        self.sim_num_steps = 50
-        self.sim_time_grid = np.linspace(0, self.sim_t_final, self.sim_num_steps)
+        # The surrogate model now has the correct time grid
+        self.sim_time_grid = self.surrogate.time_grid
+        self.sim_t_final = self.surrogate.t_final
+        self.sim_num_steps = self.surrogate.num_steps
         
         print(f"Surrogate model loaded with {self.surrogate.n_components} FPCA components")
         print(f"Parameter names: {self.surrogate.parameter_names}")

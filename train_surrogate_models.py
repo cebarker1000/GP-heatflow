@@ -35,7 +35,8 @@ class FullSurrogateModel:
     Full surrogate model that combines FPCA and GP for each component.
     """
     
-    def __init__(self, fpca_model, gps, scaler, parameter_names, param_ranges):
+    def __init__(self, fpca_model, gps, scaler, parameter_names, param_ranges, 
+                 t_final, num_steps):
         """
         Initialize the surrogate model.
         
@@ -51,6 +52,10 @@ class FullSurrogateModel:
             Names of the parameters
         param_ranges : dict
             Dictionary of parameter ranges for validation
+        t_final : float
+            Final time of the simulation
+        num_steps : int
+            Number of time steps in the simulation
         """
         self.fpca_model = fpca_model
         self.gps = gps
@@ -59,6 +64,12 @@ class FullSurrogateModel:
         self.param_ranges = param_ranges
         self.n_components = fpca_model['n_components']
         self.n_parameters = len(parameter_names)
+        self.t_final = t_final
+        self.num_steps = num_steps
+        
+        # Correctly define the time grid
+        dt = t_final / num_steps
+        self.time_grid = np.arange(1, num_steps + 1) * dt
         
     def predict_fpca_coefficients(self, X):
         """
@@ -336,7 +347,9 @@ class FullSurrogateModel:
             'parameter_names': self.parameter_names,
             'param_ranges': self.param_ranges,
             'n_components': self.n_components,
-            'n_parameters': self.n_parameters
+            'n_parameters': self.n_parameters,
+            't_final': self.t_final,
+            'num_steps': self.num_steps
         }
         
         with open(filepath, 'wb') as f:
@@ -367,27 +380,10 @@ class FullSurrogateModel:
             gps=model_data['gps'],
             scaler=model_data['scaler'],
             parameter_names=model_data['parameter_names'],
-            param_ranges=model_data['param_ranges']
+            param_ranges=model_data['param_ranges'],
+            t_final=model_data.get('t_final', 8.5e-6),  # Default for backwards compatibility
+            num_steps=model_data.get('num_steps', 50)   # Default for backwards compatibility
         )
-
-def get_parameter_ranges():
-    """
-    Get the parameter ranges from the original definitions.
-    """
-    param_ranges = {
-        "d_sample": (1.84e-6 * 0.8, 1.84e-6 * 1.2),  # ±20% around center
-        "rho_cv_sample": (2764828 * 0.8, 2764828 * 1.2),
-        "rho_cv_coupler": (3445520 * 0.8, 3445520 * 1.2),
-        "rho_cv_ins": (2764828 * 0.8, 2764828 * 1.2),
-        "d_coupler": (6.2e-8 * 0.8, 6.2e-8 * 1.2),
-        "d_ins_oside": (3.2e-6 * 0.8, 3.2e-6 * 1.2),
-        "d_ins_pside": (6.3e-6 * 0.8, 6.3e-6 * 1.2),
-        "fwhm": (12e-6 * 0.8, 12e-6 * 1.2),
-        "k_sample": (2.8, 4.8),  # Uniform range
-        "k_ins": (7.0, 13.0),    # Uniform range
-        "k_coupler": (300, 400), # Uniform range
-    }
-    return param_ranges
 
 def create_gp_model(kernel_type='rbf', n_dimensions=None):
     """
@@ -419,9 +415,9 @@ def create_gp_model(kernel_type='rbf', n_dimensions=None):
     
     return gp
 
-def train_surrogate_model(input_path="outputs/training_data_fpca.npz", 
-                         fpca_model_path="outputs/fpca_model.npz",
-                         output_path="outputs/full_surrogate_model.pkl",
+def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins_match.npz", 
+                         fpca_model_path="outputs/edmund1/fpca_model_int_ins_match.npz",
+                         output_path="outputs/edmund1/full_surrogate_model_int_ins_match.pkl",
                          test_fraction: float = 0.2,
                          random_state: int = 42):
     """
@@ -526,7 +522,9 @@ def train_surrogate_model(input_path="outputs/training_data_fpca.npz",
         gps=gps,
         scaler=scaler,
         parameter_names=parameter_names,
-        param_ranges=param_ranges
+        param_ranges=param_ranges,
+        t_final=fpca_model.get('t_final', 8.5e-6), # Get from fpca_model or default
+        num_steps=fpca_model.get('num_steps', 50)  # Get from fpca_model or default
     )
 
     # Save the model
@@ -563,7 +561,7 @@ def main():
     print(f"\n{'='*60}")
     print("FULL SURROGATE MODEL COMPLETED!")
     print(f"{'='*60}")
-    print(f"Model saved to: outputs/full_surrogate_model.pkl")
+    print(f"Model saved to: outputs/edmund1/full_surrogate_model_int_ins_match.pkl")
     print(f"All training metrics R² > 0.99: {all(m['r2'] > 0.99 for m in training_metrics)}")
     print(f"All test metrics R² > 0.99: {all(m['r2'] > 0.99 for m in test_metrics)}")
     print(f"Model ready for use in UQ analysis!")
@@ -572,9 +570,9 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create a full surrogate GP model")
-    parser.add_argument("--input_path", type=str, default="outputs/training_data_fpca.npz", help="Path to training data")
-    parser.add_argument("--fpca_model_path", type=str, default="outputs/fpca_model.npz", help="Path to FPCA model")
-    parser.add_argument("--output_path", type=str, default="outputs/full_surrogate_model.pkl", help="Path to save the surrogate model")
+    parser.add_argument("--input_path", type=str, default="outputs/edmund1/training_data_fpca_int_ins_match.npz", help="Path to training data")
+    parser.add_argument("--fpca_model_path", type=str, default="outputs/edmund1/fpca_model_int_ins_match.npz", help="Path to FPCA model")
+    parser.add_argument("--output_path", type=str, default="outputs/edmund1/full_surrogate_model_int_ins_match.pkl", help="Path to save the surrogate model")
     parser.add_argument("--test_fraction", type=float, default=0.2, help="Fraction of data to use for testing")
     parser.add_argument("--random_state", type=int, default=42, help="Random state for train/test split")
     args = parser.parse_args()

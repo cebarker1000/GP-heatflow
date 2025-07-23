@@ -27,31 +27,45 @@ full_prior = JointIndependent(marginals=uqpy_dists)  # All parameters for Edmund
 # Load Edmund surrogate model
 def load_edmund_surrogate():
     """Load the Edmund-specific surrogate model"""
-    surrogate = FullSurrogateModel.load_model("outputs/edmund1/full_surrogate_model.pkl")
+    surrogate = FullSurrogateModel.load_model("outputs/edmund2/full_surrogate_model.pkl")
     return surrogate
 
 # Load experimental data for Edmund
 def load_experimental_data():
-    data = pd.read_csv("data/experimental/edmund_71Gpa_run1.csv")
+    data = pd.read_csv("data/experimental/edmund_71Gpa_run2.csv")
     oside_data = data['oside'].values
-    y_obs = (oside_data - oside_data[0]) / (data['temp'].max() - data['temp'].iloc[0])
+    y_obs = (oside_data - oside_data[0]) / (data['temp'].max() - data['temp'].min())
     exp_time = data['time'].values
     return y_obs, exp_time
 
-def interpolate_to_surrogate_grid(exp_data, exp_time):
+def interpolate_to_surrogate_grid(exp_data, exp_time, surrogate):
     from scipy.interpolate import interp1d
-    sim_t_final = 8.5e-6  # seconds (from Edmund config)
-    sim_num_steps = 50    # from FPCA model (eigenfunctions shape)
-    surrogate_time_grid = np.linspace(0, sim_t_final, sim_num_steps)
+    surrogate_time_grid = surrogate.time_grid
     interp_func = interp1d(exp_time, exp_data, kind='linear', 
                            bounds_error=False, fill_value=(exp_data[0], exp_data[-1]))
     interpolated_data = interp_func(surrogate_time_grid)
     return interpolated_data
 
-SENSOR_VARIANCE = 0.0012  # Adjusted based on diagnostic analysis - optimal variance is ~6.6e-3
+SENSOR_VARIANCE = 0.0012
 
-def _gaussian_loglike(y_pred: np.ndarray, y_obs: np.ndarray, *, sigma2: float) -> np.ndarray:
-    resid = y_pred - y_obs              # (m, T)
+# Toggle: include surrogate predictive uncertainty in the likelihood
+INCLUDE_SURROGATE_UNCERT = True  # Set to False to reproduce the old behaviour
+
+def _gaussian_loglike(y_pred: np.ndarray, y_obs: np.ndarray, *, sigma2) -> np.ndarray:
+    """Vectorised Gaussian log-likelihood.
+
+    Parameters
+    ----------
+    y_pred : np.ndarray (m, T)
+        Model (surrogate) predictions.
+    y_obs : np.ndarray (T,) or (m, T)
+        Observations (broadcastable against *y_pred*).
+    sigma2 : float or np.ndarray (T,) or (m, T)
+        Total variance per data point.  Can be a scalar (old behaviour) or a
+        vector/matrix matching *y_pred* shape.
+    """
+    resid = y_pred - y_obs                          # (m, T)
+    sigma2 = np.asarray(sigma2)                     # ensure array for broadcasting
     return -0.5 * np.sum(resid ** 2 / sigma2 + np.log(2 * np.pi * sigma2), axis=1)
 
 CALLS = 0
@@ -67,9 +81,15 @@ def log_likelihood_full(params=None, data=None):
     surrogate = load_edmund_surrogate()
     
     for i in range(n):
-        # Generate predictions using the surrogate model
-        y_pred, _, _, _ = surrogate.predict_temperature_curves(params[i:i+1])  # Shape (1, T)
-        ll = _gaussian_loglike(y_pred, data, sigma2=SENSOR_VARIANCE)
+        # Generate predictions and predictive uncertainty using the surrogate model
+        y_pred, _, _, curve_uncert = surrogate.predict_temperature_curves(params[i:i+1])  # Shapes (1, T)
+
+        if INCLUDE_SURROGATE_UNCERT:
+            sigma2 = SENSOR_VARIANCE + curve_uncert**2  # (1, T)
+        else:
+            sigma2 = SENSOR_VARIANCE  # scalar – old behaviour
+
+        ll = _gaussian_loglike(y_pred, data, sigma2=sigma2)
         log_L[i] = ll[0]  # Extract scalar value
             
     CALLS += params.shape[0]
@@ -81,8 +101,9 @@ def main():
     import time
     start_time = time.time()
     
+    surrogate = load_edmund_surrogate()
     y_obs, exp_time = load_experimental_data()
-    y_obs_interp = interpolate_to_surrogate_grid(y_obs, exp_time)  # shape (70,)
+    y_obs_interp = interpolate_to_surrogate_grid(y_obs, exp_time, surrogate)  # shape (70,)
     
     print("\n" + "=" * 60)
     print("EDMUND MCMC SIMULATION SETUP")
@@ -158,7 +179,7 @@ def main():
         inference_model=ll_model,
         data=y_obs_interp,
         sampling_class=stretch_sampler,
-        nsamples=500000 
+        nsamples=1000000 
     )
     
     samples_full = bpe.sampler.samples               # (N, n_params)

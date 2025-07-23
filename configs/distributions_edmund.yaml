@@ -17,7 +17,7 @@ parameters:
   rho_cv_sample:
     type: normal
     center: 7072500
-    sigma: 7072
+    sigma: 70725
     description: "Sample volumetric heat capacity"
     units: "J/(m³·K)"
 
@@ -44,25 +44,25 @@ parameters:
     
   fwhm:
     type: normal
-    center: 7.0e-6
-    sigma: 0.1e-6
+    center: 12.0e-6
+    sigma: 2.0e-6
     description: "Full width at half maximum of heating pulse"
     units: "m"
     
   k_sample:
     type: uniform
     low: 20.0
-    high: 100.0
+    high: 80.0
     description: "Sample thermal conductivity"
     units: "W/(m·K)"
     
   k_ins:
     type: uniform
-    low: 2.0
-    high: 30.0
+    low: 1
+    high: 50
     description: "Insulator thermal conductivity"
     units: "W/(m·K)"
-
+  
 # Parameter mapping to config structure
 # Each parameter can map to multiple locations in the simulation config
 parameter_mapping:
@@ -101,9 +101,9 @@ sampling:
 # Output configuration
 output:
   save_samples: true
-  samples_file: "outputs/edmund1/initial_train_set.csv"
-  results_file: "outputs/edmund1/uq_batch_results.npz"
-  fpca_model_file: "outputs/edmund1/fpca_model.npz"
-  fpca_training_file: "outputs/edmund1/training_data_fpca.npz"
-  distribution_plot_file: "outputs/edmund1/parameter_distributions.png"
-  correlation_plot_file: "outputs/parameter_correlations.png"  
+  samples_file: "outputs/edmund2/initial_train_set.csv"
+  results_file: "outputs/edmund2/uq_batch_results.npz"
+  fpca_model_file: "outputs/edmund2/fpca_model.npz"
+  fpca_training_file: "outputs/edmund2/training_data_fpca.npz"
+  distribution_plot_file: "outputs/edmund2/parameter_distributions.png"
+  correlation_plot_file: "outputs/edmund2/parameter_correlations.png"  
