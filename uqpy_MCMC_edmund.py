@@ -27,12 +27,12 @@ full_prior = JointIndependent(marginals=uqpy_dists)  # All parameters for Edmund
 # Load Edmund surrogate model
 def load_edmund_surrogate():
     """Load the Edmund-specific surrogate model"""
-    surrogate = FullSurrogateModel.load_model("outputs/edmund2/full_surrogate_model.pkl")
+    surrogate = FullSurrogateModel.load_model("outputs/edmund4/full_surrogate_model.pkl")
     return surrogate
 
 # Load experimental data for Edmund
 def load_experimental_data():
-    data = pd.read_csv("data/experimental/edmund_71Gpa_run2.csv")
+    data = pd.read_csv("data/experimental/edmund_71Gpa_run4.csv")
     oside_data = data['oside'].values
     y_obs = (oside_data - oside_data[0]) / (data['temp'].max() - data['temp'].min())
     exp_time = data['time'].values

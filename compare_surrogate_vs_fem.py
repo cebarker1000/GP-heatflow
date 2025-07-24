@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Script to compare surrogate model predictions with full FEM simulations.
-Uses parameter values from Edmund config to test surrogate accuracy.
+Uses parameter values from 5-materials config to test surrogate accuracy.
 """
 
 import numpy as np
@@ -18,56 +18,63 @@ def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Compare surrogate vs FEM predictions')
     parser.add_argument('--surrogate-path', 
-                       default="outputs/edmund1/full_surrogate_model_int_ins_match.pkl",
-                       help='Path to surrogate model file (default: outputs/edmund1/full_surrogate_model_int_ins_match.pkl)')
+                       default="outputs/geballe/80Gpa/run1/full_surrogate_model.pkl",
+                       help='Path to surrogate model file (default: outputs/geballe/80Gpa/run1/full_surrogate_model.pkl)')
     parser.add_argument('--config-path',
-                       default="configs/edmund.yaml", 
-                       help='Path to simulation config file (default: configs/edmund.yaml)')
+                       default="configs/config_5_materials.yaml", 
+                       help='Path to simulation config file (default: configs/config_5_materials.yaml)')
+    parser.add_argument('--distributions-path',
+                       default="configs/distributions.yaml",
+                       help='Path to distributions config file (default: configs/distributions.yaml)')
     parser.add_argument('--experimental-data',
-                       default="data/experimental/edmund_71Gpa_run1.csv",
-                       help='Path to experimental data file (default: data/experimental/edmund_71Gpa_run1.csv)')
+                       default="data/experimental/geballe/geballe_80GPa_1.csv",
+                       help='Path to experimental data file (default: data/experimental/geballe/geballe_80GPa_1.csv)')
     return parser.parse_args()
 
-def load_edmund_config_params(config_path="configs/edmund.yaml"):
+def load_config_params(config_path="configs/config_5_materials.yaml", distributions_path="configs/distributions.yaml"):
     """
-    Load parameter values directly from Edmund config file.
+    Load parameter values directly from 5-materials config file.
     Returns the parameter values in the order expected by the surrogate.
     """
     # Load parameter definitions and mapping for parameter order
-    param_defs = get_param_defs_from_config("configs/distributions_edmund.yaml")
-    param_mapping = get_param_mapping_from_config("configs/distributions_edmund.yaml")
+    param_defs = get_param_defs_from_config(distributions_path)
+    param_mapping = get_param_mapping_from_config(distributions_path)
     
     # Extract parameter names in order
     param_names = [param_def['name'] for param_def in param_defs]
     print(f"Parameter names: {param_names}")
     
-    # Load Edmund config file directly
+    # Load config file directly
     with open(config_path, 'r') as f:
-        edmund_config = yaml.safe_load(f)
+        config = yaml.safe_load(f)
     
-    # Extract parameter values from Edmund config
+    # Extract parameter values from config
     param_values = []
     for param_def in param_defs:
         param_name = param_def['name']
         
         if param_name == 'd_sample':
-            value = float(edmund_config['mats']['sample']['z'])
+            value = float(config['mats']['sample']['z'])
         elif param_name == 'rho_cv_sample':
-            value = float(edmund_config['mats']['sample']['rho_cv'])
+            value = float(config['mats']['sample']['rho_cv'])
+        elif param_name == 'rho_cv_coupler':
+            value = float(config['mats']['p_coupler']['rho_cv'])  # Use p_coupler as reference
         elif param_name == 'rho_cv_ins':
-            value = float(edmund_config['mats']['p_ins']['rho_cv'])  # Use p_ins as reference
+            value = float(config['mats']['p_ins']['rho_cv'])  # Use p_ins as reference
+        elif param_name == 'd_coupler':
+            value = float(config['mats']['p_coupler']['z'])  # Use p_coupler as reference
         elif param_name == 'd_ins_pside':
-            value = float(edmund_config['mats']['p_ins']['z'])
+            value = float(config['mats']['p_ins']['z'])
         elif param_name == 'd_ins_oside':
-            value = float(edmund_config['mats']['o_ins']['z'])
+            value = float(config['mats']['o_ins']['z'])
         elif param_name == 'fwhm':
-            value = float(edmund_config['heating']['fwhm'])
+            value = float(config['heating']['fwhm'])
         elif param_name == 'k_sample':
-            value = float(edmund_config['mats']['sample']['k'])
+            value = float(config['mats']['sample']['k'])
         elif param_name == 'k_ins':
-            value = float(edmund_config['mats']['p_ins']['k'])  # Use p_ins as reference
-        elif param_name == 'k_int':
-            value = float(edmund_config['mats']['p_int']['k'])  # Use p_int as reference
+            value = float(config['mats']['p_ins']['k'])  # Use p_ins as reference
+        elif param_name == 'k_coupler':
+            value = float(config['mats']['p_coupler']['k'])  # Use p_coupler as reference
         else:
             print(f"WARNING: Unknown parameter {param_name}, using midpoint of distribution")
             # Fallback to distribution midpoint
@@ -82,13 +89,13 @@ def load_edmund_config_params(config_path="configs/edmund.yaml"):
     
     param_values = np.array(param_values)
     
-    print(f"Parameter values from Edmund config:")
+    print(f"Parameter values from config:")
     for name, value in zip(param_names, param_values):
         print(f"  {name}: {value:.3e}")
     
     return param_values, param_names, param_defs, param_mapping
 
-def run_fem_simulation(param_values, param_names, param_defs, param_mapping, config_path="configs/edmund.yaml"):
+def run_fem_simulation(param_values, param_names, param_defs, param_mapping, config_path="configs/config_5_materials.yaml"):
     """
     Run a single FEM simulation with the given parameters.
     """
@@ -173,17 +180,20 @@ def run_surrogate_prediction(param_values, param_names, surrogate_path):
         traceback.print_exc()
         return None, None, None, None
 
-def load_experimental_data(data_path="data/experimental/edmund_71Gpa_run1.csv"):
+def load_experimental_data(data_path="data/experimental/geballe/geballe_80GPa_1.csv"):
     """
     Load experimental data for comparison.
     """
     try:
         data = pd.read_csv(data_path)
+        
+        # Check if this is Geballe data (has 'temp' column) or Edmund data (has 'oside' column)
+        pside_data = data['temp'].values
         oside_data = data['oside'].values
         exp_time = data['time'].values
-        
-        # Normalize experimental data the same way as in MCMC
-        y_obs = (oside_data - oside_data[0]) / (data['temp'].max() - data['temp'].min())
+            
+        # Normalize experimental data
+        y_obs = (oside_data - oside_data[0]) / (pside_data.max() - pside_data.min())
         
         return y_obs, exp_time
     except Exception as e:
@@ -265,17 +275,62 @@ def main():
     print(f"Using config file: {args.config_path}")
     print(f"Using experimental data: {args.experimental_data}")
     
-    # Load parameter values from Edmund config
-    param_values, param_names, param_defs, param_mapping = load_edmund_config_params(args.config_path)
+    # Load parameter values from config
+    param_values, param_names, param_defs, param_mapping = load_config_params(args.config_path, args.distributions_path)
     
-    # Run FEM simulation
-    fem_curve, fem_time, fem_result = run_fem_simulation(param_values, param_names, param_defs, param_mapping, args.config_path)
+   
     
     # Run surrogate prediction
     surrogate_curve, curve_uncert, surrogate_time, surrogate = run_surrogate_prediction(param_values, param_names, args.surrogate_path)
     
+    # Print raw surrogate prediction for debugging
+    print("\n" + "=" * 60)
+    print("RAW SURROGATE PREDICTION DEBUG INFO")
+    print("=" * 60)
+    print(f"Surrogate time grid: {len(surrogate_time)} points")
+    print(f"Time range: {surrogate_time[0]:.3e} to {surrogate_time[-1]:.3e} seconds")
+    print(f"Time range: {surrogate_time[0]*1e6:.3f} to {surrogate_time[-1]*1e6:.3f} μs")
+    print(f"Surrogate curve range: {surrogate_curve.min():.6f} to {surrogate_curve.max():.6f}")
+    print(f"Surrogate curve mean: {surrogate_curve.mean():.6f}")
+    print(f"Surrogate curve std: {surrogate_curve.std():.6f}")
+
+    # Run FEM simulation
+    fem_curve, fem_time, fem_result = run_fem_simulation(param_values, param_names, param_defs, param_mapping, args.config_path)
+    
+    # Print first 10 and last 10 time points
+    print("\nFirst 10 time points:")
+    for i in range(min(10, len(surrogate_time))):
+        print(f"  t[{i}] = {surrogate_time[i]*1e6:.3f} μs, y = {surrogate_curve[i]:.6f}")
+    
+    print("\nLast 10 time points:")
+    for i in range(max(0, len(surrogate_time)-10), len(surrogate_time)):
+        print(f"  t[{i}] = {surrogate_time[i]*1e6:.3f} μs, y = {surrogate_curve[i]:.6f}")
+    
     # Load experimental data
     exp_curve, exp_time = load_experimental_data(args.experimental_data)
+    
+    # Print raw experimental data for debugging
+    if exp_curve is not None and exp_time is not None:
+        print("\n" + "=" * 60)
+        print("RAW EXPERIMENTAL DATA DEBUG INFO")
+        print("=" * 60)
+        print(f"Experimental time grid: {len(exp_time)} points")
+        print(f"Time range: {exp_time[0]:.3e} to {exp_time[-1]:.3e} seconds")
+        print(f"Time range: {exp_time[0]*1e6:.3f} to {exp_time[-1]*1e6:.3f} μs")
+        print(f"Experimental curve range: {exp_curve.min():.6f} to {exp_curve.max():.6f}")
+        print(f"Experimental curve mean: {exp_curve.mean():.6f}")
+        print(f"Experimental curve std: {exp_curve.std():.6f}")
+        
+        # Print first 10 and last 10 time points
+        print("\nFirst 10 time points:")
+        for i in range(min(10, len(exp_time))):
+            print(f"  t[{i}] = {exp_time[i]*1e6:.3f} μs, y = {exp_curve[i]:.6f}")
+        
+        print("\nLast 10 time points:")
+        for i in range(max(0, len(exp_time)-10), len(exp_time)):
+            print(f"  t[{i}] = {exp_time[i]*1e6:.3f} μs, y = {exp_curve[i]:.6f}")
+    else:
+        print("\nWARNING: No experimental data loaded!")
     
     # Create comparison plots
     if fem_curve is not None or surrogate_curve is not None:

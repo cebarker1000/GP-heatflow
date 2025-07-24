@@ -375,14 +375,19 @@ class FullSurrogateModel:
         with open(filepath, 'rb') as f:
             model_data = pickle.load(f)
         
+        # Get timing information from FPCA model if available, otherwise use stored values or defaults
+        fpca_model = model_data['fpca_model']
+        t_final = fpca_model.get('t_final', model_data.get('t_final', 8.5e-6))
+        num_steps = fpca_model.get('num_steps', model_data.get('num_steps', 50))
+        
         return cls(
-            fpca_model=model_data['fpca_model'],
+            fpca_model=fpca_model,
             gps=model_data['gps'],
             scaler=model_data['scaler'],
             parameter_names=model_data['parameter_names'],
             param_ranges=model_data['param_ranges'],
-            t_final=model_data.get('t_final', 8.5e-6),  # Default for backwards compatibility
-            num_steps=model_data.get('num_steps', 50)   # Default for backwards compatibility
+            t_final=t_final,
+            num_steps=num_steps
         )
 
 def create_gp_model(kernel_type='rbf', n_dimensions=None):
@@ -527,14 +532,27 @@ def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins
 
     # Create surrogate model with the GPs trained on the training split
     print("\n5. Creating surrogate model...")
+    
+    # Get the correct number of time steps from the FPCA model's eigenfunctions
+    # This ensures the surrogate model matches the actual resolution of the training data
+    correct_num_steps = fpca_model['eigenfunctions'].shape[0]
+    print(f"FPCA model eigenfunctions shape: {fpca_model['eigenfunctions'].shape}")
+    print(f"Using {correct_num_steps} time steps (derived from FPCA model)")
+    
+    # Get timing information from FPCA model if available, otherwise use defaults
+    t_final = fpca_model.get('t_final', 8.5e-6)
+    num_steps = fpca_model.get('num_steps', correct_num_steps)
+    
+    print(f"Using timing parameters: t_final={t_final:.2e}s, num_steps={num_steps}")
+    
     surrogate = FullSurrogateModel(
         fpca_model=fpca_model,
         gps=gps,
         scaler=scaler,
         parameter_names=parameter_names,
         param_ranges=param_ranges,
-        t_final=fpca_model.get('t_final', 8.5e-6), # Get from fpca_model or default
-        num_steps=fpca_model.get('num_steps', 50)  # Get from fpca_model or default
+        t_final=t_final,
+        num_steps=num_steps
     )
 
     # Predict curves for the test set

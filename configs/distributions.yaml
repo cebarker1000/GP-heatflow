@@ -65,8 +65,8 @@ parameters:
     
   k_sample:
     type: uniform
-    low: 2.0
-    high: 5.0
+    low: 1.0
+    high: 10.0
     description: "Sample thermal conductivity"
     units: "W/(m·K)"
     
@@ -128,15 +128,15 @@ parameter_mapping:
 # Sampling configuration
 sampling:
   method: "latin_hypercube"
-  n_samples: 200
+  n_samples: 120
   random_seed: 42  # Set to an integer for reproducible results
 
 # Output configuration
 output:
   save_samples: true
-  samples_file: "outputs/initial_train_set.csv"
-  results_file: "outputs/uq_batch_results.npz"
-  fpca_model_file: "outputs/fpca_model.npz"
-  fpca_training_file: "outputs/training_data_fpca.npz"
-  distribution_plot_file: "outputs/parameter_distributions.png"
-  correlation_plot_file: "outputs/parameter_correlations.png"  
+  samples_file: "outputs/geballe/geballe_80GPa_1/initial_train_set.csv"
+  results_file: "outputs/geballe/geballe_80GPa_1/uq_batch_results.npz"
+  fpca_model_file: "outputs/geballe/geballe_80GPa_1/fpca_model.npz"
+  fpca_training_file: "outputs/geballe/geballe_80GPa_1/training_data_fpca.npz"
+  distribution_plot_file: "outputs/geballe/geballe_80GPa_1/parameter_distributions.png"
+  correlation_plot_file: "outputs/geballe/geballe_80GPa_1/parameter_correlations.png"  

@@ -2,6 +2,8 @@ import sys
 import numpy as np
 import pandas as pd
 import argparse
+import yaml
+import os
 from UQpy.sampling.stratified_sampling import LatinHypercubeSampling
 from analysis.uq_wrapper import (run_single_simulation, run_batch_simulations, save_batch_results, 
                        load_batch_results, build_fpca_model, save_fpca_model, 
@@ -10,6 +12,316 @@ from analysis.config_utils import load_all_from_config, create_uqpy_distribution
 import matplotlib.pyplot as plt
 import time
 from datetime import datetime, timedelta
+
+
+def plot_experimental_data_verification(config_path, output_dir="outputs"):
+    """
+    Load and plot the experimental data curves from the heating file specified in the config.
+    This allows verification that the correct heating file is being used.
+    """
+    print("\n" + "="*60)
+    print("VERIFYING EXPERIMENTAL DATA FILE")
+    print("="*60)
+    
+    # Load the config file
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Get the heating file path
+    heating_file = config['heating']['file']
+    print(f"Heating file specified in config: {heating_file}")
+    
+    # Check if file exists
+    if not os.path.exists(heating_file):
+        print(f"ERROR: Heating file not found: {heating_file}")
+        return False
+    
+    # Load the experimental data
+    try:
+        df = pd.read_csv(heating_file)
+        print(f"Successfully loaded experimental data from: {heating_file}")
+        print(f"Data shape: {df.shape}")
+        print(f"Columns: {list(df.columns)}")
+        
+        # Check for required columns
+        required_columns = ['time']
+        if 'oside' in df.columns:
+            required_columns.append('oside')
+        if 'temp' in df.columns:
+            required_columns.append('temp')
+        
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            print(f"WARNING: Missing columns: {missing_columns}")
+            print(f"Available columns: {list(df.columns)}")
+        
+        # Convert time to numeric and sort
+        df['time'] = pd.to_numeric(df['time'], errors='coerce')
+        df = df.sort_values('time').dropna(subset=['time'])
+        
+        # Create the plot
+        fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+        fig.suptitle(f'Experimental Data Verification\nFile: {heating_file}', fontsize=14)
+        
+        # Plot time vs temp (if available)
+        if 'temp' in df.columns:
+            df['temp'] = pd.to_numeric(df['temp'], errors='coerce')
+            df_temp = df.dropna(subset=['temp'])
+            
+            axes[0].plot(df_temp['time'] * 1e6, df_temp['temp'], 'b-', linewidth=2, label='temp')
+            axes[0].set_xlabel('Time (μs)')
+            axes[0].set_ylabel('Temperature (K)')
+            axes[0].set_title('Temperature vs Time')
+            axes[0].grid(True, alpha=0.3)
+            axes[0].legend()
+            
+            print(f"Temperature data: {len(df_temp)} points")
+            print(f"Time range: {df_temp['time'].min()*1e6:.3f} to {df_temp['time'].max()*1e6:.3f} μs")
+            print(f"Temperature range: {df_temp['temp'].min():.2f} to {df_temp['temp'].max():.2f} K")
+        else:
+            axes[0].text(0.5, 0.5, 'No temp column found', ha='center', va='center', transform=axes[0].transAxes)
+            axes[0].set_title('Temperature vs Time (No Data)')
+        
+        # Plot time vs oside (if available)
+        if 'oside' in df.columns:
+            df['oside'] = pd.to_numeric(df['oside'], errors='coerce')
+            df_oside = df.dropna(subset=['oside'])
+            
+            axes[1].plot(df_oside['time'] * 1e6, df_oside['oside'], 'r-', linewidth=2, label='oside')
+            axes[1].set_xlabel('Time (μs)')
+            axes[1].set_ylabel('Temperature (K)')
+            axes[1].set_title('Oside vs Time')
+            axes[1].grid(True, alpha=0.3)
+            axes[1].legend()
+            
+            print(f"Oside data: {len(df_oside)} points")
+            print(f"Time range: {df_oside['time'].min()*1e6:.3f} to {df_oside['time'].max()*1e6:.3f} μs")
+            print(f"Oside range: {df_oside['oside'].min():.2f} to {df_oside['oside'].max():.2f} K")
+        else:
+            axes[1].text(0.5, 0.5, 'No oside column found', ha='center', va='center', transform=axes[1].transAxes)
+            axes[1].set_title('Oside vs Time (No Data)')
+        
+        plt.tight_layout()
+        
+        # Save the plot
+        plot_file = os.path.join(output_dir, 'experimental_data_verification.png')
+        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        print(f"Experimental data verification plot saved to: {plot_file}")
+        
+        # Show the plot
+        plt.show()
+        
+        return True
+        
+    except Exception as e:
+        print(f"ERROR loading experimental data: {e}")
+        return False
+
+
+def plot_test_simulation_verification(sample, param_defs, param_mapping, config_path, output_dir="outputs"):
+    """
+    Run a single test simulation and compare the oside curve with experimental data.
+    This allows verification that the simulation setup is working correctly.
+    """
+    print("\n" + "="*60)
+    print("RUNNING TEST SIMULATION VERIFICATION")
+    print("="*60)
+    
+    # Load the config file to get experimental data path
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Get experimental data path - try multiple possible locations
+    experimental_file = None
+    possible_paths = [
+        config.get('output', {}).get('analysis', {}).get('experimental_data_file'),
+        config.get('output', {}).get('experimental_data_file'),
+        "data/experimental/geballe/geballe_80GPa_1.csv",  # Common fallback
+        "data/experimental/geballe/geballe_80GPa_2.csv",  # Common fallback
+    ]
+    
+    for path in possible_paths:
+        if path and os.path.exists(path):
+            experimental_file = path
+            break
+    
+    if not experimental_file:
+        print("WARNING: No experimental data file found. Tried paths:")
+        for path in possible_paths:
+            if path:
+                print(f"  - {path} {'(EXISTS)' if os.path.exists(path) else '(NOT FOUND)'}")
+        print("Skipping experimental data comparison.")
+    else:
+        print(f"Found experimental data file: {experimental_file}")
+    
+    print(f"Running test simulation with first sample...")
+    print(f"Sample parameters:")
+    for i, param in enumerate(param_defs):
+        print(f"  {param['name']}: {sample[0, i]:.3e}")
+    
+    # Run a single simulation
+    try:
+        test_result = run_single_simulation(
+            sample=sample[0],
+            param_defs=param_defs,
+            param_mapping=param_mapping,
+            simulation_index=0,
+            config_path=config_path,
+            suppress_print=True
+        )
+        
+        if 'error' in test_result:
+            print(f"ERROR: Test simulation failed: {test_result['error']}")
+            return False
+        
+        if 'watcher_data' not in test_result or 'oside' not in test_result['watcher_data']:
+            print("ERROR: Test simulation did not return valid oside data")
+            return False
+        
+        # Extract oside data
+        oside_data = test_result['watcher_data']['oside']
+        sim_time = np.array(oside_data['time'])
+        sim_oside_normalized = np.array(oside_data['normalized'])
+        
+        print(f"Test simulation completed successfully!")
+        print(f"Simulation time range: {sim_time[0]*1e6:.3f} to {sim_time[-1]*1e6:.3f} μs")
+        print(f"Oside normalized range: {sim_oside_normalized.min():.6f} to {sim_oside_normalized.max():.6f}")
+        
+        # Load experimental data for comparison if available
+        exp_time = None
+        exp_oside = None
+        
+        if experimental_file and os.path.exists(experimental_file):
+            try:
+                print(f"Loading experimental data from: {experimental_file}")
+                exp_df = pd.read_csv(experimental_file)
+                print(f"Experimental data shape: {exp_df.shape}")
+                print(f"Experimental data columns: {list(exp_df.columns)}")
+                
+                # Check for oside and temp columns
+                if 'oside' in exp_df.columns and 'temp' in exp_df.columns:
+                    # Convert to numeric and sort
+                    exp_df['time'] = pd.to_numeric(exp_df['time'], errors='coerce')
+                    exp_df['oside'] = pd.to_numeric(exp_df['oside'], errors='coerce')
+                    exp_df['temp'] = pd.to_numeric(exp_df['temp'], errors='coerce')
+                    exp_df = exp_df.dropna(subset=['time', 'oside', 'temp']).sort_values('time')
+                    
+                    print(f"After cleaning - data shape: {exp_df.shape}")
+                    print(f"Time range: {exp_df['time'].min()*1e6:.3f} to {exp_df['time'].max()*1e6:.3f} μs")
+                    print(f"Oside range: {exp_df['oside'].min():.2f} to {exp_df['oside'].max():.2f} K")
+                    print(f"Temp range: {exp_df['temp'].min():.2f} to {exp_df['temp'].max():.2f} K")
+                    
+                    exp_time = exp_df['time'].values
+                    exp_oside_raw = exp_df['oside'].values
+                    exp_temp_raw = exp_df['temp'].values
+                    
+                    # Calculate pside excursion (max temp - min temp)
+                    pside_excursion = exp_temp_raw.max() - exp_temp_raw.min()
+                    print(f"Pside excursion: {pside_excursion:.2f} K")
+                    
+                    # Normalize experimental oside data using pside excursion
+                    exp_oside = (exp_oside_raw - exp_oside_raw.min()) / pside_excursion
+                    
+                    print(f"Experimental data loaded successfully!")
+                    print(f"Experimental time range: {exp_time[0]*1e6:.3f} to {exp_time[-1]*1e6:.3f} μs")
+                    print(f"Experimental oside normalized range: {exp_oside.min():.6f} to {exp_oside.max():.6f}")
+                else:
+                    missing_cols = []
+                    if 'oside' not in exp_df.columns:
+                        missing_cols.append('oside')
+                    if 'temp' not in exp_df.columns:
+                        missing_cols.append('temp')
+                    print(f"WARNING: Missing required columns: {missing_cols}. Available columns: {list(exp_df.columns)}")
+                    print("First few rows of experimental data:")
+                    print(exp_df.head())
+                    
+            except Exception as e:
+                print(f"WARNING: Failed to load experimental data: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Create comparison plot
+        fig, axes = plt.subplots(2, 1, figsize=(12, 10))
+        fig.suptitle('Test Simulation Verification\nFirst Sample vs Experimental Data', fontsize=14)
+        
+        # Plot 1: Raw simulation data
+        axes[0].plot(sim_time * 1e6, sim_oside_normalized, 'b-', linewidth=2, label='Simulation (normalized)')
+        axes[0].set_xlabel('Time (μs)')
+        axes[0].set_ylabel('Normalized Temperature')
+        axes[0].set_title('Simulation Oside Curve')
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend()
+        
+        # Plot 2: Comparison with experimental data
+        axes[1].plot(sim_time * 1e6, sim_oside_normalized, 'b-', linewidth=2, label='Simulation (normalized)')
+        
+        if exp_time is not None and exp_oside is not None:
+            axes[1].plot(exp_time * 1e6, exp_oside, 'r--', linewidth=2, label='Experimental (normalized)')
+            
+            # Calculate overlap statistics
+            # Interpolate simulation data to experimental time points for comparison
+            from scipy.interpolate import interp1d
+            try:
+                sim_interp = interp1d(sim_time, sim_oside_normalized, bounds_error=False, fill_value='extrapolate')
+                sim_at_exp_times = sim_interp(exp_time)
+                
+                # Calculate statistics on overlapping time range
+                valid_mask = ~np.isnan(sim_at_exp_times)
+                if np.sum(valid_mask) > 0:
+                    exp_valid = exp_oside[valid_mask]
+                    sim_valid = sim_at_exp_times[valid_mask]
+                    
+                    rmse = np.sqrt(np.mean((sim_valid - exp_valid)**2))
+                    max_diff = np.max(np.abs(sim_valid - exp_valid))
+                    mean_diff = np.mean(sim_valid - exp_valid)
+                    
+                    stats_text = f'Comparison Statistics:\nRMSE: {rmse:.6f}\nMax |Diff|: {max_diff:.6f}\nMean Diff: {mean_diff:.6f}'
+                    axes[1].text(0.02, 0.98, stats_text, transform=axes[1].transAxes, 
+                               verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8), fontsize=9)
+                    
+                    print(f"\nComparison Statistics:")
+                    print(f"  RMSE: {rmse:.6f}")
+                    print(f"  Max |Diff|: {max_diff:.6f}")
+                    print(f"  Mean Diff: {mean_diff:.6f}")
+            except Exception as e:
+                print(f"WARNING: Could not calculate comparison statistics: {e}")
+        
+        axes[1].set_xlabel('Time (μs)')
+        axes[1].set_ylabel('Normalized Temperature')
+        axes[1].set_title('Simulation vs Experimental Comparison')
+        axes[1].grid(True, alpha=0.3)
+        axes[1].legend()
+        
+        plt.tight_layout()
+        
+        # Save the plot
+        plot_file = os.path.join(output_dir, 'test_simulation_verification.png')
+        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        print(f"Test simulation verification plot saved to: {plot_file}")
+        
+        # Show the plot
+        plt.show()
+        
+        # Ask user if they want to proceed
+        print("\n" + "="*60)
+        print("TEST SIMULATION VERIFICATION COMPLETE")
+        print("="*60)
+        print("Please review the plot above to ensure:")
+        print("1. The simulation oside curve looks reasonable")
+        print("2. The timing and shape are appropriate")
+        print("3. The comparison with experimental data (if available) is reasonable")
+        
+        response = input("\nDo you want to proceed with the full batch of simulations? (y/n): ").strip().lower()
+        if response in ['y', 'yes']:
+            print("Proceeding with full batch simulations...")
+            return True
+        else:
+            print("Aborting batch simulations. Please check your configuration and try again.")
+            return False
+            
+    except Exception as e:
+        print(f"ERROR running test simulation: {e}")
+        return False
 
 
 def main():
@@ -40,12 +352,20 @@ Examples:
                        help='Output directory for results (overrides config file setting)')
     parser.add_argument('--rebuild-fpca-from', type=str, default=None,
                        help='Path to a uq_batch_results.npz file to rebuild the FPCA model from, skipping simulations.')
+    parser.add_argument('--skip-test', action='store_true',
+                       help='Skip the test simulation verification step')
     
     args = parser.parse_args()
     
     print(f"Using distributions file: {args.distributions}")
     print(f"Using simulation config file: {args.config}")
     print(f"Output directory: {args.output_dir}")
+    
+    # Verify the experimental data file being used
+    if not args.rebuild_fpca_from:  # Only verify if we're actually running simulations
+        success = plot_experimental_data_verification(args.config, args.output_dir)
+        if not success:
+            print("WARNING: Failed to verify experimental data. Proceeding anyway...")
     
     # Load configuration from specified YAML file
     param_defs, PARAM_MAPPING, sampling_config, output_config = load_all_from_config(args.distributions)
@@ -149,8 +469,22 @@ Examples:
     
     # This block will be skipped if --rebuild-fpca-from is used
     if not args.rebuild_fpca_from:
+        # Run test simulation verification (unless skipped)
+        if not args.skip_test:
+            print("\n" + "="*60)
+            print("STEP 1: TEST SIMULATION VERIFICATION")
+            print("="*60)
+            test_success = plot_test_simulation_verification(
+                samples, param_defs, PARAM_MAPPING, args.config, args.output_dir
+            )
+            if not test_success:
+                print("Test simulation verification failed. Exiting.")
+                return
+        
         # Run batch simulations
-        print("\nRunning batch simulations...")
+        print("\n" + "="*60)
+        print("STEP 2: RUNNING BATCH SIMULATIONS")
+        print("="*60)
         print(f"Running {len(samples)} simulations...")
         
         # Timing variables
@@ -220,74 +554,64 @@ Examples:
         print("Skipping batch simulations and using existing data.")
         results_file = args.rebuild_fpca_from
         
-    # Step 2: Build FPCA model and recast training data
+    # Step 3: Build FPCA model and recast training data
     print("\n" + "="*60)
-    print("STEP 2: BUILDING FPCA MODEL AND RECASTING DATA")
+    print("STEP 3: BUILDING FPCA MODEL AND RECASTING DATA")
     print("="*60)
     
     # Load and verify the saved data
     print("\nVerifying saved data...")
-    try:
-        loaded_data = load_batch_results(results_file)
-    except FileNotFoundError:
-        print(f"Error: Results file not found at {results_file}")
-        return
-        
-    print(f"Loaded data keys: {list(loaded_data.keys())}")
-    print(f"Oside curves shape: {loaded_data['oside_curves'].shape}")
-    print(f"Parameters shape: {loaded_data['parameters'].shape}")
-    print(f"Parameter names: {loaded_data['parameter_names']}")
+    batch_data = load_batch_results(results_file)
     
-    # Show some statistics about the oside curves
-    oside_curves = loaded_data['oside_curves']
-    valid_curves = oside_curves[~np.isnan(oside_curves).any(axis=1)]
-    print(f"Valid oside curves: {len(valid_curves)}")
-    if len(valid_curves) > 0:
+    print(f"Loaded data keys: {list(batch_data.keys())}")
+    print(f"Oside curves shape: {batch_data['oside_curves'].shape}")
+    print(f"Parameters shape: {batch_data['parameters'].shape}")
+    print(f"Parameter names: {batch_data['parameter_names']}")
+    
+    # Count valid curves
+    valid_curves = np.sum(~np.isnan(batch_data['oside_curves']).any(axis=1))
+    print(f"Valid oside curves: {valid_curves}")
+    
+    # Basic statistics
+    valid_data = batch_data['oside_curves'][~np.isnan(batch_data['oside_curves']).any(axis=1)]
+    if len(valid_data) > 0:
         print(f"Oside curve statistics:")
-        print(f"  Mean max value: {np.mean(np.max(valid_curves, axis=1)):.3f}")
-        print(f"  Mean min value: {np.mean(np.min(valid_curves, axis=1)):.3f}")
-        print(f"  Mean range: {np.mean(np.max(valid_curves, axis=1) - np.min(valid_curves, axis=1)):.3f}")
+        print(f"  Mean max value: {np.mean(np.max(valid_data, axis=1)):.3f}")
+        print(f"  Mean min value: {np.mean(np.min(valid_data, axis=1)):.3f}")
+        print(f"  Mean range: {np.mean(np.max(valid_data, axis=1) - np.min(valid_data, axis=1)):.3f}")
     
     # Build FPCA model
     print("\nBuilding FPCA model...")
-    fpca_model = build_fpca_model(
-        input_file=results_file,
-        min_components=4,
-        variance_threshold=0.99
-    )
-        
-    # Add timing info to FPCA model for the new surrogate model
-    import yaml
-    with open(args.config, 'r') as f:
-        sim_config = yaml.safe_load(f)
-    fpca_model['t_final'] = sim_config['timing']['t_final']
-    fpca_model['num_steps'] = sim_config['timing']['num_steps']
-
+    fpca_model = build_fpca_model(batch_data, results_file)
+    
     # Save FPCA model
     print("\nSaving FPCA model...")
     save_fpca_model(fpca_model, fpca_model_file)
-        
+    
     # Recast training data to FPCA space
     print("\nRecasting training data to FPCA space...")
-    recast_data = recast_training_data_to_fpca(
-        input_file=results_file,
-        fpca_model=fpca_model,
-        output_file=fpca_training_file
-    )
-        
-    print(f"\nFPCA Analysis Summary:")
-    print(f"  Number of components: {fpca_model['n_components']}")
-    print(f"  Explained variance: {fpca_model['cumulative_variance'][-1]:.4f}")
-    print(f"  Training data shape: {recast_data['parameters'].shape}")
-    print(f"  FPCA scores shape: {recast_data['fpca_scores'].shape}")
-        
-    # Show FPCA score statistics
-    fpca_scores = recast_data['fpca_scores']
-    print(f"\nFPCA Score Statistics:")
+    recast_training_data_to_fpca(batch_data, fpca_model, fpca_training_file)
+    
+    # Print summary
+    print("\n" + "="*60)
+    print("FPCA ANALYSIS SUMMARY")
+    print("="*60)
+    print(f"Number of components: {fpca_model['n_components']}")
+    print(f"Explained variance: {fpca_model['explained_variance']:.4f}")
+    print(f"Training data shape: {batch_data['parameters'].shape}")
+    print(f"FPCA scores shape: {fpca_model['training_scores'].shape}")
+    
+    # Print FPCA score statistics
+    print("\nFPCA Score Statistics:")
     for i in range(fpca_model['n_components']):
-        scores_i = fpca_scores[:, i]
-        print(f"  PC{i+1}: mean={np.mean(scores_i):.4f}, std={np.std(scores_i):.4f}")
-        
+        scores = fpca_model['training_scores'][:, i]
+        print(f"PC{i+1}: mean={np.mean(scores):.4f}, std={np.std(scores):.4f}")
+    
+    print(f"\nTraining data generation completed successfully!")
+    print(f"Results saved to: {results_file}")
+    print(f"FPCA model saved to: {fpca_model_file}")
+    print(f"FPCA training data saved to: {fpca_training_file}")
+
 
 def plot_parameter_distributions(samples, param_defs, output_dir="outputs"):
     """
