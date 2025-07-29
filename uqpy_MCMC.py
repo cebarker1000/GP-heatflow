@@ -1,4 +1,5 @@
 import yaml
+import os
 import argparse
 from analysis.config_utils import create_uqpy_distributions, get_param_defs_from_config
 from UQpy.distributions.collection.JointIndependent import JointIndependent
@@ -11,43 +12,81 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
+
+# ------------------------------------------------------------
+# Baseline utility
+# ------------------------------------------------------------
+
+
+def _compute_baseline(times: np.ndarray, temps: np.ndarray, *, cfg_path: str | None = None):
+    """Return baseline temperature according to *baseline* section in *cfg_path*.
+
+    If *cfg_path* is None or the *baseline* section is missing, fall back to the
+    first data-point (legacy behaviour).
+    """
+    if cfg_path is None or not os.path.exists(cfg_path):
+        return float(temps[0])
+
+    with open(cfg_path, "r") as f:
+        sim_cfg = yaml.safe_load(f)
+
+    baseline_cfg = sim_cfg.get("baseline", {})
+    if not baseline_cfg.get("use_average", False):
+        return float(temps[0])
+
+    t_window = float(baseline_cfg.get("time_window", 0.0))
+    mask = times <= t_window
+    if mask.any():
+        return float(np.mean(temps[mask]))
+    return float(temps[0])
+
 # grab surrogate model
 from train_surrogate_models import FullSurrogateModel
 
 logging.getLogger("UQpy").setLevel(logging.DEBUG)
 
-def load_experimental_data(data_path):
+def load_experimental_data(data_path, cfg_path):
+    """Load experimental data and normalise using the same baseline rules as the
+    simulation.
+
+    Normalisation:
+        (oside - baseline_oside) / excursion_pside
+    where *pside* is the column ``temp``.
+    """
     data = pd.read_csv(data_path)
-    oside_data = data['oside'].values
-    temp_data = data['temp'].values
-    
-    # Calculate normalization factors
-    oside_min = oside_data[0]
-    temp_range = temp_data.max() - temp_data.min()
-    
-    # Apply normalization
-    y_obs = (oside_data - oside_min) / temp_range
-    exp_time = data['time'].values
-    
-    # Print normalization information
-    print(f"Experimental data normalization:")
-    print(f"  Original oside range: {oside_data.min():.6f} to {oside_data.max():.6f}")
-    print(f"  Original temp range: {temp_data.min():.6f} to {temp_data.max():.6f}")
-    print(f"  Normalization factor (temp_range): {temp_range:.6f}")
-    print(f"  Normalized oside range: {y_obs.min():.6f} to {y_obs.max():.6f}")
-    print(f"  Normalized oside std: {y_obs.std():.6f}")
-    
-    return y_obs, exp_time
+    oside_data = data["oside"].values
+    temp_data = data["temp"].values  # p-side
+
+    times = data["time"].values
+
+    baseline_pside = _compute_baseline(times, temp_data, cfg_path=cfg_path)
+    baseline_oside = _compute_baseline(times, oside_data, cfg_path=cfg_path)
+
+    excursion_pside = (temp_data - baseline_pside).max() - (temp_data - baseline_pside).min()
+    if excursion_pside <= 0.0:
+        raise ValueError("Temp excursion is zero – check experimental data")
+
+    y_obs = (oside_data - baseline_oside) / excursion_pside
+
+    # Diagnostics
+    print("Experimental data normalisation (new baseline logic):")
+    print(f"  Baseline p-side (temp): {baseline_pside:.3f} K")
+    print(f"  Baseline o-side:        {baseline_oside:.3f} K")
+    print(f"  Excursion p-side:       {excursion_pside:.3f} K")
+    print(f"  y_obs range:            {y_obs.min():.4f} – {y_obs.max():.4f}")
+
+    return y_obs, times
 
 def interpolate_to_surrogate_grid(exp_data, exp_time, surrogate):
     from scipy.interpolate import interp1d
     
-    # Use the number of steps defined in the surrogate model
-    n_time_steps = surrogate.num_steps
-    surrogate_time_grid = np.linspace(surrogate.time_grid[0], surrogate.time_grid[-1], n_time_steps)
+    # The surrogate prediction uses a fixed number of time steps (e.g., 120).
+    # We must interpolate the experimental data to match this grid.
+    n_time_steps = surrogate.predict_temperature_curves(np.atleast_2d(surrogate.scaler.mean_))[0].shape[1]
+    surrogate_time_grid = np.linspace(exp_time.min(), exp_time.max(), n_time_steps)
 
     interp_func = interp1d(exp_time, exp_data, kind='linear',
-                           bounds_error=False, fill_value=(exp_data[0], exp_data[-1]))
+                           bounds_error=False, fill_value="extrapolate")
     interpolated_data = interp_func(surrogate_time_grid)
     return interpolated_data
 
@@ -91,6 +130,7 @@ def main():
     parser.add_argument('--config_path', type=str, required=True, help="Path to the distributions YAML file.")
     parser.add_argument('--surrogate_path', type=str, required=True, help="Path to the trained surrogate model file.")
     parser.add_argument('--exp_data_path', type=str, required=True, help="Path to the experimental data CSV file.")
+    parser.add_argument('--sim_cfg', type=str, required=True, help="Path to the simulation YAML config (for baseline settings).")
     parser.add_argument('--output_path', type=str, required=True, help="Path to save the MCMC results NPZ file.")
     parser.add_argument('--plot_path_prefix', type=str, required=True, help="Prefix for output plot filenames.")
     parser.add_argument('--n_walkers', type=int, default=60, help="Number of MCMC walkers.")
@@ -108,7 +148,7 @@ def main():
     full_prior = JointIndependent(marginals=uqpy_dists)
     
     surrogate = FullSurrogateModel.load_model(args.surrogate_path)
-    y_obs, exp_time = load_experimental_data(args.exp_data_path)
+    y_obs, exp_time = load_experimental_data(args.exp_data_path, args.sim_cfg)
     y_obs_interp = interpolate_to_surrogate_grid(y_obs, exp_time, surrogate)
     
     print("\n" + "=" * 60)

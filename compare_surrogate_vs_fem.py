@@ -111,9 +111,9 @@ def run_fem_simulation(param_values, param_names, param_defs, param_mapping, con
             config_path=config_path
         )
         
-        fem_time = time.time() - start_time
-        print(f"FEM simulation completed in {fem_time:.2f} seconds")
-        
+        fem_elapsed = time.time() - start_time
+        print(f"FEM simulation completed in {fem_elapsed:.2f} seconds")
+
         if 'watcher_data' in result and 'oside' in result['watcher_data']:
             fem_curve = result['watcher_data']['oside']['normalized']
             fem_time_array = result['watcher_data']['oside']['time']
@@ -153,25 +153,22 @@ def run_surrogate_prediction(param_values, param_names, surrogate_path):
         # Predict temperature curves along with predictive uncertainty
         curves, fpca_coeffs, fpca_uncertainties, curve_uncertainties = surrogate.predict_temperature_curves(X)
         
-        surrogate_time = time.time() - start_time
-        print(f"Surrogate prediction completed in {surrogate_time:.4f} seconds")
+        surrogate_elapsed = time.time() - start_time
+        print(f"Surrogate prediction completed in {surrogate_elapsed:.4f} seconds")
 
         # Flatten uncertainty array just in case
-        curve_uncert = np.asarray(curve_uncertainties).flatten()
+        curve_uncert_flat = np.asarray(curve_uncertainties).flatten()
 
         # Print basic uncertainty statistics
         print("GP predictive 1σ (surrogate) statistics:")
-        print(f"  min:  {curve_uncert.min():.3e}")
-        print(f"  mean: {curve_uncert.mean():.3e}")
-        print(f"  max:  {curve_uncert.max():.3e}")
-        
-        # Get the predicted curve
+        print(f"  min:  {curve_uncert_flat.min():.3e}")
+        print(f"  mean: {curve_uncert_flat.mean():.3e}")
+        print(f"  max:  {curve_uncert_flat.max():.3e}")
+
         surrogate_curve = curves[0]
         curve_uncert = curve_uncertainties[0]
-        
-        # The surrogate model now has the correct time grid
         surrogate_time_array = surrogate.time_grid
-        
+
         return surrogate_curve, curve_uncert, surrogate_time_array, surrogate
         
     except Exception as e:
@@ -281,7 +278,13 @@ def main():
    
     
     # Run surrogate prediction
-    surrogate_curve, curve_uncert, surrogate_time, surrogate = run_surrogate_prediction(param_values, param_names, args.surrogate_path)
+    surrogate_curve, curve_uncert, surrogate_time, surrogate = run_surrogate_prediction(
+        param_values, param_names, args.surrogate_path)
+
+    # ------------------------------------------------------------------
+    # Load and normalise experimental data *before* we need the variables
+    # ------------------------------------------------------------------
+    exp_curve, exp_time = load_experimental_data(args.experimental_data)
     
     # Print raw surrogate prediction for debugging
     print("\n" + "=" * 60)
@@ -296,41 +299,29 @@ def main():
 
     # Run FEM simulation
     fem_curve, fem_time, fem_result = run_fem_simulation(param_values, param_names, param_defs, param_mapping, args.config_path)
-    
-    # Print first 10 and last 10 time points
-    print("\nFirst 10 time points:")
-    for i in range(min(10, len(surrogate_time))):
-        print(f"  t[{i}] = {surrogate_time[i]*1e6:.3f} μs, y = {surrogate_curve[i]:.6f}")
-    
-    print("\nLast 10 time points:")
-    for i in range(max(0, len(surrogate_time)-10), len(surrogate_time)):
-        print(f"  t[{i}] = {surrogate_time[i]*1e6:.3f} μs, y = {surrogate_curve[i]:.6f}")
-    
-    # Load experimental data
-    exp_curve, exp_time = load_experimental_data(args.experimental_data)
-    
-    # Print raw experimental data for debugging
-    if exp_curve is not None and exp_time is not None:
+
+    # -------------------------------------------------------------
+    # Grid diagnostics: compare FEM and surrogate time axes
+    # -------------------------------------------------------------
+    if fem_time is not None and surrogate_time is not None:
         print("\n" + "=" * 60)
-        print("RAW EXPERIMENTAL DATA DEBUG INFO")
+        print("GRID DIAGNOSTICS")
         print("=" * 60)
-        print(f"Experimental time grid: {len(exp_time)} points")
-        print(f"Time range: {exp_time[0]:.3e} to {exp_time[-1]:.3e} seconds")
-        print(f"Time range: {exp_time[0]*1e6:.3f} to {exp_time[-1]*1e6:.3f} μs")
-        print(f"Experimental curve range: {exp_curve.min():.6f} to {exp_curve.max():.6f}")
-        print(f"Experimental curve mean: {exp_curve.mean():.6f}")
-        print(f"Experimental curve std: {exp_curve.std():.6f}")
-        
-        # Print first 10 and last 10 time points
-        print("\nFirst 10 time points:")
-        for i in range(min(10, len(exp_time))):
-            print(f"  t[{i}] = {exp_time[i]*1e6:.3f} μs, y = {exp_curve[i]:.6f}")
-        
-        print("\nLast 10 time points:")
-        for i in range(max(0, len(exp_time)-10), len(exp_time)):
-            print(f"  t[{i}] = {exp_time[i]*1e6:.3f} μs, y = {exp_curve[i]:.6f}")
-    else:
-        print("\nWARNING: No experimental data loaded!")
+        print(f"len(fem_time)       = {len(fem_time)}")
+        print(f"len(surrogate_time) = {len(surrogate_time)}")
+        if len(fem_time) > 1:
+            dt_fem = np.diff(fem_time)[0]
+        else:
+            dt_fem = np.nan
+        if len(surrogate_time) > 1:
+            dt_sur = np.diff(surrogate_time)[0]
+        else:
+            dt_sur = np.nan
+        print(f"dt_fem              = {dt_fem:.3e}")
+        print(f"dt_surrogate        = {dt_sur:.3e}")
+        print(f"fem_time[-1]        = {fem_time[-1]:.3e}")
+        print(f"surrogate_time[-1]  = {surrogate_time[-1]:.3e}")
+    # -------------------------------------------------------------
     
     # Create comparison plots
     if fem_curve is not None or surrogate_curve is not None:

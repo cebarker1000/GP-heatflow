@@ -12,6 +12,23 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+# ------------------------------------------------------------
+# Baseline helper (same rules as core.simulation_engine)
+# ------------------------------------------------------------
+
+
+def _compute_baseline(times: np.ndarray, temps: np.ndarray, cfg: Dict[str, Any]):
+    """Compute baseline according to cfg['baseline'] settings."""
+    baseline_cfg = cfg.get('baseline', {})
+    if not baseline_cfg.get('use_average', False):
+        return float(temps[0])
+
+    t_window = float(baseline_cfg.get('time_window', 0.0))
+    mask = times <= t_window
+    if mask.any():
+        return float(np.mean(temps[mask]))
+    return float(temps[0])
+
 from core.simulation_engine import OptimizedSimulationEngine, suppress_output
 from analysis import analysis_utils as au
 
@@ -180,38 +197,43 @@ def plot_temperature_curves(cfg, output_folder):
         pside_col = sim_columns[0]
         oside_col = sim_columns[1]
         
-        # Normalize simulation data using pside temperature excursion for both
-        pside_excursion = df_sim[pside_col].max() - df_sim[pside_col].min()
-        sim_pside_normed = (df_sim[pside_col] - df_sim[pside_col].iloc[0]) / pside_excursion
-        sim_oside_normed = (df_sim[oside_col] - df_sim[oside_col].iloc[0]) / pside_excursion
+        # Compute baselines using the same rules as the simulation
+        times_sim = df_sim['time'].values
+        pside_baseline_sim = _compute_baseline(times_sim, df_sim[pside_col].values, cfg)
+        oside_baseline_sim = _compute_baseline(times_sim, df_sim[oside_col].values, cfg)
+
+        pside_excursion = (df_sim[pside_col] - pside_baseline_sim).max() - (df_sim[pside_col] - pside_baseline_sim).min()
+        if pside_excursion == 0:
+            print("Warning: pside excursion is zero; normalization skipped")
+            return
+
+        sim_pside_normed = (df_sim[pside_col] - pside_baseline_sim) / pside_excursion
+        sim_oside_normed = (df_sim[oside_col] - oside_baseline_sim) / pside_excursion
         
         # Check if smoothing was applied and handle experimental data accordingly
         smoothing_enabled = cfg.get('heating', {}).get('smoothing', {}).get('enabled', False)
         
         if smoothing_enabled and 'temp_raw' in df_exp.columns:
-            # Use smoothed data for normalization (same as simulation)
-            exp_temp_for_norm = df_exp['temp']  # smoothed data
-            exp_temp_raw = df_exp['temp_raw']   # raw data
-            
-            # Normalize both raw and smoothed data using the same normalization factor (smoothed data range)
-            # This ensures they're on the same scale for comparison
-            smoothed_range = df_exp['temp'].max() - df_exp['temp'].min()
-            exp_pside_normed = (df_exp['temp'] - df_exp['temp'].iloc[0]) / smoothed_range
-            exp_pside_raw_normed = (df_exp['temp_raw'] - df_exp['temp_raw'].iloc[0]) / smoothed_range
+            # Compute baseline on smoothed data for consistency
+            times_exp = df_exp['time'].values
+            pside_baseline_exp = _compute_baseline(times_exp, df_exp['temp'].values, cfg)
+
+            smoothed_excursion = (df_exp['temp'] - pside_baseline_exp).max() - (df_exp['temp'] - pside_baseline_exp).min()
+            exp_pside_normed = (df_exp['temp'] - pside_baseline_exp) / smoothed_excursion
+            exp_pside_raw_normed = (df_exp['temp_raw'] - pside_baseline_exp) / smoothed_excursion
         else:
-            # No smoothing applied, use regular temp data
+            times_exp = df_exp['time'].values
+            pside_baseline_exp = _compute_baseline(times_exp, df_exp['temp'].values, cfg)
             exp_temp_for_norm = df_exp['temp']
             exp_temp_raw = None
-            exp_pside_normed = (df_exp['temp'] - df_exp['temp'].iloc[0]) / (df_exp['temp'].max() - df_exp['temp'].min())
+            exp_excursion = (exp_temp_for_norm - pside_baseline_exp).max() - (exp_temp_for_norm - pside_baseline_exp).min()
+            exp_pside_normed = (df_exp['temp'] - pside_baseline_exp) / exp_excursion
             exp_pside_raw_normed = None
         
         # Handle experimental oside data if available
         if 'oside' in df_exp.columns:
-            # Downshift experimental oside to start from ic_temp and normalize
-            ic_temp = cfg['heating']['ic_temp']
-            oside_initial = df_exp['oside'].iloc[0]
-            exp_oside_shifted = df_exp['oside'] - oside_initial + ic_temp
-            exp_oside_normed = (exp_oside_shifted - exp_oside_shifted.iloc[0]) / (exp_temp_for_norm.max() - exp_temp_for_norm.min())
+            oside_baseline_exp = _compute_baseline(times_exp, df_exp['oside'].values, cfg)
+            exp_oside_normed = (df_exp['oside'] - oside_baseline_exp) / exp_excursion
         else:
             # If no oside data, use pside data for both (common in some experiments)
             exp_oside_normed = exp_pside_normed.copy()

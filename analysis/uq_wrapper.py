@@ -208,21 +208,48 @@ def extract_oside_curves(results: List[Dict[str, Any]]) -> np.ndarray:
         2D array where each row is a normalized oside temperature curve
     """
     curves = []
+    successful_curves = []
     
-    for result in results:
+    # First pass: collect all successful curves and find the maximum length
+    max_length = 0
+    for i, result in enumerate(results):
         if 'watcher_data' in result and 'oside' in result['watcher_data']:
-            # Extract normalized temperature curve
             normalized_curve = result['watcher_data']['oside']['normalized']
-            curves.append(normalized_curve)
+            curve_length = len(normalized_curve)
+            max_length = max(max_length, curve_length)
+            successful_curves.append(normalized_curve)
+            print(f"Curve {i}: length = {curve_length}")
+        else:
+            print(f"Curve {i}: failed simulation or missing data")
+    
+    if not successful_curves:
+        print("WARNING: No successful curves found!")
+        return np.array([])
+    
+    print(f"Maximum curve length: {max_length}")
+    print(f"Number of successful curves: {len(successful_curves)}")
+    
+    # Second pass: pad all curves to the same length
+    for i, result in enumerate(results):
+        if 'watcher_data' in result and 'oside' in result['watcher_data']:
+            normalized_curve = result['watcher_data']['oside']['normalized']
+            curve_length = len(normalized_curve)
+            
+            if curve_length < max_length:
+                # Pad with the last value
+                padded_curve = np.pad(normalized_curve, (0, max_length - curve_length), 
+                                     mode='edge')
+                curves.append(padded_curve)
+                print(f"Curve {i}: padded from {curve_length} to {max_length}")
+            else:
+                curves.append(normalized_curve)
+                print(f"Curve {i}: length {curve_length} (no padding needed)")
         else:
             # Handle failed simulations - fill with NaN
-            if curves:  # If we have at least one successful curve
-                curve_length = len(curves[0])
-                curves.append(np.full(curve_length, np.nan))
-            else:
-                # No successful curves yet, skip this one
-                continue
+            curves.append(np.full(max_length, np.nan))
+            print(f"Curve {i}: filled with NaN (failed simulation)")
     
+    print(f"Final array shape: {len(curves)} curves, max length {max_length}")
     return np.array(curves)
 
 
@@ -242,13 +269,22 @@ def save_batch_results(results: List[Dict[str, Any]],
         Output file path
     """
     # Extract oside curves
+    print("Extracting oside curves...")
     oside_curves = extract_oside_curves(results)
+    
+    if len(oside_curves) == 0:
+        print("ERROR: No oside curves extracted!")
+        return
+    
+    print(f"Oside curves shape: {oside_curves.shape}")
     
     # Extract parameters
     param_names = [p["name"] for p in param_defs]
     parameters = np.array([result.get('parameters', {}) for result in results])
     param_array = np.array([[parameters[i].get(name, np.nan) for name in param_names] 
                            for i in range(len(parameters))])
+    
+    print(f"Parameter array shape: {param_array.shape}")
     
     # Extract timing information
     timing_data = []
@@ -294,7 +330,7 @@ def load_batch_results(input_file: str = "uq_batch_results.npz") -> Dict[str, np
 
 
 def build_fpca_model(input_file: str = "outputs/uq_batch_results.npz", 
-                    min_components: int = 2,
+                    min_components: int = 4,
                     variance_threshold: float = 0.99) -> Dict[str, Any]:
     """
     Build a Functional PCA model from batch results.
@@ -304,7 +340,7 @@ def build_fpca_model(input_file: str = "outputs/uq_batch_results.npz",
     input_file : str
         Path to the .npz file containing batch results
     min_components : int
-        Minimum number of components to use (default: 2)
+        Minimum number of components to use (default: 4)
     variance_threshold : float
         Minimum cumulative variance to explain (default: 0.99)
         

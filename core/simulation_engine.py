@@ -434,8 +434,10 @@ class OptimizedSimulationEngine:
             
             fwhm = float(heating_cfg['fwhm'])
             
-            # Calculate offset and Gaussian parameters
-            offset = heating_data['temp'].iloc[0] - ic_temp
+            # Calculate offset and Gaussian parameters using configurable baseline
+            baseline_temp = self._compute_baseline(heating_data['time'].values,
+                                                   heating_data['temp'].values)
+            offset = baseline_temp - ic_temp
             coeff = -4.0 * np.log(2.0) / fwhm**2
             center = bc_cfg.get('center', 0.0)
             
@@ -983,36 +985,67 @@ class OptimizedSimulationEngine:
         time_array = np.array(watcher_setup['time'])
         watcher_data = {}
         
-        # First pass: collect raw data and calculate pside normalization factor
+        # First pass: collect raw data and calculate pside baseline & excursion
+        baseline_cfg = self.cfg.get('baseline', {})
+        use_avg = bool(baseline_cfg.get('use_average', False))
+        t_window = float(baseline_cfg.get('time_window', 0.0))
+
         pside_data = None
-        pside_initial = None
+        pside_baseline = None
         pside_max_excursion = None
-        
+
         for name in watcher_setup['names']:
             raw_data = np.array(watcher_setup['data'][name])
             
             if name == 'pside':
-                pside_data = raw_data
-                pside_initial = raw_data[0]
-                pside_max_excursion = raw_data.max() - raw_data.min()
-        
+                # Compute baseline for pside
+                mask = time_array <= t_window if use_avg else np.zeros_like(time_array, dtype=bool)
+                if not use_avg:
+                    mask[0] = True  # Ensure at least first sample included
+                elif not mask.any():
+                    # Fallback to first datapoint if window too small
+                    mask[0] = True
+
+                pside_baseline = np.mean(raw_data[mask])
+                pside_data = raw_data  # Store for later normalization logic
+
+                # Excursion relative to baseline
+                pside_max_excursion = (raw_data - pside_baseline).max() - (raw_data - pside_baseline).min()
+
         # Second pass: process all watcher points
         for name in watcher_setup['names']:
             raw_data = np.array(watcher_setup['data'][name])
-            initial_temp = raw_data[0]
+
+            # Compute baseline for this watcher (may be pside or others)
+            mask = time_array <= t_window if use_avg else np.zeros_like(time_array, dtype=bool)
+            if not use_avg or not mask.any():
+                mask = np.zeros_like(time_array, dtype=bool)
+                mask[0] = True
+
+            baseline_val = np.mean(raw_data[mask])
             
-            if name == 'oside' and pside_data is not None:
-                # Normalize oside relative to pside
+            if name == 'pside' and pside_data is not None:
+                # P-side: subtract its own baseline, scale by its excursion
                 if pside_max_excursion > 0:
-                    normalized_data = (raw_data - initial_temp) / pside_max_excursion
+                    normalized_data = (raw_data - pside_baseline) / pside_max_excursion
                 else:
                     normalized_data = np.zeros_like(raw_data)
                 max_excursion = pside_max_excursion
+
+            elif name == 'oside' and pside_data is not None:
+                # O-side: subtract its *own* baseline but still scale by p-side excursion
+                if pside_max_excursion > 0:
+                    normalized_data = (raw_data - baseline_val) / pside_max_excursion
+                else:
+                    normalized_data = np.zeros_like(raw_data)
+                max_excursion = pside_max_excursion
+            
             else:
-                # Normalize other points relative to themselves
-                max_excursion = raw_data.max() - raw_data.min()
+                # Normalize other points relative to their own excursion
+                shifted = raw_data - baseline_val
+                max_excursion = shifted.max() - shifted.min()
                 if max_excursion > 0:
-                    normalized_data = (raw_data - initial_temp) / max_excursion
+                    normalized_data = shifted / max_excursion
                 else:
                     normalized_data = np.zeros_like(raw_data)
             
@@ -1020,11 +1053,37 @@ class OptimizedSimulationEngine:
                 'time': time_array,
                 'raw': raw_data,
                 'normalized': normalized_data,
-                'initial_temp': initial_temp,
+                'initial_temp': baseline_val,
                 'max_excursion': max_excursion
             }
         
         return watcher_data
+
+    def _compute_baseline(self, time_series: np.ndarray, temp_series: np.ndarray) -> float:
+        """Compute baseline temperature using either the first data point or an
+        average over an initial time window, depending on *cfg['baseline']*.
+
+        If *cfg['baseline']['use_average']* is True, the baseline is taken as
+        the mean of *temp_series* for which *time_series <= time_window* where
+        *time_window* comes from *cfg['baseline']['time_window']* (defaults to
+        0).  If the mask is empty (e.g. the window is smaller than the first
+        measurement interval) we fall back to the first data point so the
+        behaviour is robust.
+        """
+        baseline_cfg = self.cfg.get('baseline', {})
+        use_avg = bool(baseline_cfg.get('use_average', False))
+        if not use_avg:
+            return float(temp_series[0])
+
+        # Time window defaults to 0 so that, if unspecified, we again take the
+        # first data point (same as old behaviour).
+        t_window = float(baseline_cfg.get('time_window', 0.0))
+
+        mask = time_series <= t_window
+        if mask.any():
+            return float(np.mean(temp_series[mask]))
+        # Fallback – no points in window.
+        return float(temp_series[0])
 
 
 # Alias for backward compatibility

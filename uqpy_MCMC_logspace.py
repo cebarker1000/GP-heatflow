@@ -11,6 +11,8 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import os
+import sys
 import logging
 
 from analysis.config_utils import (
@@ -32,17 +34,50 @@ from uqpy_surrogate import timeseries_model
 # Set up logging
 logging.getLogger("UQpy").setLevel(logging.DEBUG)
 
+# ------------------------------------------------------------
+# Baseline helper
+# ------------------------------------------------------------
+
+
+def _compute_baseline(times: np.ndarray, temps: np.ndarray, *, cfg_path: str | None = None):
+    if cfg_path is None or not os.path.exists(cfg_path):
+        return float(temps[0])
+
+    import yaml
+    with open(cfg_path, "r") as f:
+        sim_cfg = yaml.safe_load(f)
+
+    baseline_cfg = sim_cfg.get("baseline", {})
+    if not baseline_cfg.get("use_average", False):
+        return float(temps[0])
+
+    t_window = float(baseline_cfg.get("time_window", 0.0))
+    mask = times <= t_window
+    if mask.any():
+        return float(np.mean(temps[mask]))
+    return float(temps[0])
+
 # Global variables
 CALLS = 0
 SENSOR_VARIANCE = 1e-4  # Sensor noise variance
 
-def load_experimental_data():
-    """Load experimental data from CSV file."""
+def load_experimental_data(cfg_path):
+    """Load experimental data and normalise with configurable baseline."""
     data = pd.read_csv("data/experimental/geballe_heat_data.csv")
-    oside_data = data['oside'].values
-    y_obs = (oside_data - oside_data[0]) / (data['temp'].max() - data['temp'].iloc[0])
-    exp_time = data['time'].values
-    return y_obs, exp_time
+
+    oside_data = data["oside"].values
+    temp_data = data["temp"].values  # pside
+    times = data["time"].values
+
+    baseline_pside = _compute_baseline(times, temp_data, cfg_path=cfg_path)
+    baseline_oside = _compute_baseline(times, oside_data, cfg_path=cfg_path)
+
+    excursion_pside = (temp_data - baseline_pside).max() - (temp_data - baseline_pside).min()
+    if excursion_pside <= 0:
+        raise ValueError("Temp excursion is zero")
+
+    y_obs = (oside_data - baseline_oside) / excursion_pside
+    return y_obs, times
 
 def interpolate_to_surrogate_grid(exp_data, exp_time):
     """Interpolate experimental data to surrogate model time grid."""
@@ -132,8 +167,14 @@ def main():
     print("All parameters sampled in log-space for improved convergence")
     print(f"Parameter names: {param_names}")
     
+    # Determine sim config path for baseline
+    cfg_path = "configs/config_5_materials.yaml"
+    for arg in sys.argv:
+        if arg.startswith("--sim_cfg="):
+            cfg_path = arg.split("=", 1)[1]
+
     # Load experimental data
-    y_obs, exp_time = load_experimental_data()
+    y_obs, exp_time = load_experimental_data(cfg_path)
     y_obs_interp = interpolate_to_surrogate_grid(y_obs, exp_time)  # shape (50,)
     
     print("\nProceed with log-space MCMC simulation?")

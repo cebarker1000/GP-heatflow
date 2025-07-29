@@ -44,14 +44,14 @@ layout:
 
 # Timing parameters
 timing:
-  t_final: 24.0e-6  # final time (s)
+  t_final: 25.0e-6  # final time (s)
   num_steps: 100    # number of time steps
 
 # Heating configuration
 heating:
   ic_temp: 300.0   # initial temperature (K)
   fwhm: 13.2e-06     # full width at half maximum (m)
-  file: "data/experimental/geballe/geballe_80GPa_2.csv"
+  file: "data/experimental/geballe_heat_data.csv"
   
   # Boundary condition configuration
   bc:
@@ -106,7 +106,7 @@ output:
     enabled: true
     plot_temperature_curves: true
     calculate_rmse: true
-    experimental_data_file: "data/geballe/geballe_80GPa_2.csv"
+    experimental_data_file: "data/experimental/geballe_heat_data.csv"
 
 # Performance settings
 performance:

@@ -375,10 +375,29 @@ class FullSurrogateModel:
         with open(filepath, 'rb') as f:
             model_data = pickle.load(f)
         
-        # Get timing information from FPCA model if available, otherwise use stored values or defaults
+        # Get timing information and **ensure** the number of steps matches the
+        # length of the FPCA eigenfunctions (i.e. the curve length).  This
+        # avoids inconsistencies where *num_steps* was copied from the YAML
+        # config but the FPCA was built at a different resolution.
+
         fpca_model = model_data['fpca_model']
+
+        # Total simulated time – fall back to stored value or a sensible default
         t_final = fpca_model.get('t_final', model_data.get('t_final', 8.5e-6))
-        num_steps = fpca_model.get('num_steps', model_data.get('num_steps', 50))
+
+        # Derive *num_steps* directly from the eigenfunction array to guarantee
+        # consistency with reconstructed curves.  If the key exists but is
+        # inconsistent we silently override it.
+        n_time_from_fpca = fpca_model['eigenfunctions'].shape[0]
+        num_steps = int(n_time_from_fpca)
+
+        # Optionally warn if the stored num_steps disagrees (helps debugging)
+        stored_num_steps = model_data.get('num_steps', None)
+        if stored_num_steps is not None and stored_num_steps != num_steps:
+            print(
+                f"Warning: stored num_steps={stored_num_steps} does not match "
+                f"FPCA eigenfunction length ({num_steps}). Using {num_steps}."
+            )
         
         return cls(
             fpca_model=fpca_model,
@@ -423,6 +442,7 @@ def create_gp_model(kernel_type='rbf', n_dimensions=None):
 def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins_match.npz", 
                          fpca_model_path="outputs/edmund1/fpca_model_int_ins_match.npz",
                          output_path="outputs/edmund1/full_surrogate_model_int_ins_match.pkl",
+                         training_config="configs/config_5_materials.yaml",
                          test_fraction: float = 0.2,
                          random_state: int = 42):
     """
@@ -436,6 +456,8 @@ def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins
         Path to the FPCA model file
     output_path : str
         Path to save the surrogate model
+    training_config : str
+        Path to the config file used to generate training data
     test_fraction : float
         Fraction of data to use for testing
     random_state : int
@@ -457,6 +479,16 @@ def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins
     y_full = recast_data['fpca_scores']
     parameter_names = recast_data['parameter_names']
     print(f"Training data: {len(X_full)} samples, {X_full.shape[1]} parameters, {y_full.shape[1]} FPCA components")
+
+    # Load the training config to get timing parameters
+    print(f"\n1.5. Loading training config: {training_config}")
+    import yaml
+    with open(training_config, 'r') as f:
+        training_config_data = yaml.safe_load(f)
+    
+    t_final = float(training_config_data['timing']['t_final'])
+    num_steps = int(training_config_data['timing']['num_steps'])
+    print(f"Training config timing: t_final={t_final:.2e}s, num_steps={num_steps}")
 
     # Split into train / test
     X_train, X_test, y_train, y_test = train_test_split(
@@ -539,11 +571,12 @@ def train_surrogate_model(input_path="outputs/edmund1/training_data_fpca_int_ins
     print(f"FPCA model eigenfunctions shape: {fpca_model['eigenfunctions'].shape}")
     print(f"Using {correct_num_steps} time steps (derived from FPCA model)")
     
-    # Get timing information from FPCA model if available, otherwise use defaults
-    t_final = fpca_model.get('t_final', 8.5e-6)
-    num_steps = fpca_model.get('num_steps', correct_num_steps)
+    # Use timing parameters from the training config (not defaults)
+    # Store them in the FPCA model for future reference
+    fpca_model['t_final'] = t_final
+    fpca_model['num_steps'] = num_steps
     
-    print(f"Using timing parameters: t_final={t_final:.2e}s, num_steps={num_steps}")
+    print(f"Using timing parameters from training config: t_final={t_final:.2e}s, num_steps={num_steps}")
     
     surrogate = FullSurrogateModel(
         fpca_model=fpca_model,
@@ -600,7 +633,9 @@ def main():
     print("Creating full surrogate GP model...")
     
     # Train the surrogate model
-    surrogate, training_metrics, test_metrics = train_surrogate_model()
+    surrogate, training_metrics, test_metrics = train_surrogate_model(
+        training_config="configs/config_5_materials.yaml"
+    )
     
     # Final summary
     print(f"\n{'='*60}")
@@ -618,6 +653,7 @@ if __name__ == "__main__":
     parser.add_argument("--input_path", type=str, default="outputs/edmund1/training_data_fpca_int_ins_match.npz", help="Path to training data")
     parser.add_argument("--fpca_model_path", type=str, default="outputs/edmund1/fpca_model_int_ins_match.npz", help="Path to FPCA model")
     parser.add_argument("--output_path", type=str, default="outputs/edmund1/full_surrogate_model_int_ins_match.pkl", help="Path to save the surrogate model")
+    parser.add_argument("--training_config", type=str, default="configs/config_5_materials.yaml", help="Config file used to generate training data")
     parser.add_argument("--test_fraction", type=float, default=0.2, help="Fraction of data to use for testing")
     parser.add_argument("--random_state", type=int, default=42, help="Random state for train/test split")
     args = parser.parse_args()
@@ -625,12 +661,14 @@ if __name__ == "__main__":
     print(f"Using input path: {args.input_path}")
     print(f"Using FPCA model path: {args.fpca_model_path}")
     print(f"Using output path: {args.output_path}")
+    print(f"Using training config: {args.training_config}")
     
     # Train the surrogate model
     surrogate, training_metrics, test_metrics = train_surrogate_model(
         input_path=args.input_path,
         fpca_model_path=args.fpca_model_path,
         output_path=args.output_path,
+        training_config=args.training_config,
         test_fraction=args.test_fraction,
         random_state=args.random_state
     )

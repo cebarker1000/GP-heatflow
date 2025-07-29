@@ -134,6 +134,7 @@ def plot_test_simulation_verification(sample, param_defs, param_mapping, config_
     # Get experimental data path - try multiple possible locations
     experimental_file = None
     possible_paths = [
+        config.get('heating', {}).get('file'),               # <= prioritize heating file (what simulation uses)
         config.get('output', {}).get('analysis', {}).get('experimental_data_file'),
         config.get('output', {}).get('experimental_data_file'),
         "data/experimental/geballe/geballe_80GPa_1.csv",  # Common fallback
@@ -212,19 +213,64 @@ def plot_test_simulation_verification(sample, param_defs, param_mapping, config_
                     print(f"Temp range: {exp_df['temp'].min():.2f} to {exp_df['temp'].max():.2f} K")
                     
                     exp_time = exp_df['time'].values
-                    exp_oside_raw = exp_df['oside'].values
-                    exp_temp_raw = exp_df['temp'].values
-                    
-                    # Calculate pside excursion (max temp - min temp)
-                    pside_excursion = exp_temp_raw.max() - exp_temp_raw.min()
-                    print(f"Pside excursion: {pside_excursion:.2f} K")
-                    
-                    # Normalize experimental oside data using pside excursion
-                    exp_oside = (exp_oside_raw - exp_oside_raw.min()) / pside_excursion
-                    
+                    exp_pside_raw = exp_df['temp'].values  # P-side
+                    exp_oside_raw = exp_df['oside'].values  # O-side
+
+                    # -------------------------------------------------------------
+                    # Apply baseline / normalization logic identical to simulation
+                    # -------------------------------------------------------------
+                    baseline_cfg = config.get('baseline', {})
+                    use_avg = bool(baseline_cfg.get('use_average', False))
+                    t_window = float(baseline_cfg.get('time_window', 0.0))
+
+                    def _compute_baseline(time_arr, temp_arr):
+                        """Replicates OptimizedSimulationEngine._compute_baseline (simplified)."""
+                        if not use_avg:
+                            return float(temp_arr[0])
+                        mask = time_arr <= t_window
+                        if mask.any():
+                            return float(np.mean(temp_arr[mask]))
+                        return float(temp_arr[0])
+
+                    # Baselines
+                    pside_baseline = _compute_baseline(exp_time, exp_pside_raw)
+                    oside_baseline = _compute_baseline(exp_time, exp_oside_raw)
+
+                    # P-side excursion (max – min) after baseline removal
+                    pside_shifted = exp_pside_raw - pside_baseline
+                    pside_max_excursion = pside_shifted.max() - pside_shifted.min()
+                    if pside_max_excursion <= 0:
+                        pside_max_excursion = 1.0  # avoid divide-by-zero; results will be zeros
+
+                    # Normalized experimental curves
+                    exp_pside_norm = pside_shifted / pside_max_excursion
+                    exp_oside_norm = (exp_oside_raw - oside_baseline) / pside_max_excursion
+
+                    # Store for later plotting in simulation comparison
+                    exp_oside = exp_oside_norm
+
                     print(f"Experimental data loaded successfully!")
                     print(f"Experimental time range: {exp_time[0]*1e6:.3f} to {exp_time[-1]*1e6:.3f} μs")
-                    print(f"Experimental oside normalized range: {exp_oside.min():.6f} to {exp_oside.max():.6f}")
+                    print(f"Experimental pside normalized range: {exp_pside_norm.min():.6f} to {exp_pside_norm.max():.6f}")
+                    print(f"Experimental oside normalized range: {exp_oside_norm.min():.6f} to {exp_oside_norm.max():.6f}")
+
+                    # -------------------------------------------
+                    # Additional plot: normalization verification
+                    # -------------------------------------------
+                    fig_norm, ax_norm = plt.subplots(figsize=(12, 5))
+                    ax_norm.plot(exp_time * 1e6, exp_pside_norm, 'g-', label='P-side (normalized)')
+                    ax_norm.plot(exp_time * 1e6, exp_oside_norm, 'm--', label='O-side (normalized)')
+                    ax_norm.set_xlabel('Time (μs)')
+                    ax_norm.set_ylabel('Normalized Temperature')
+                    ax_norm.set_title('Experimental Data – Normalization Verification')
+                    ax_norm.grid(True, alpha=0.3)
+                    ax_norm.legend()
+                    plt.tight_layout()
+
+                    norm_plot_file = os.path.join(output_dir, 'experimental_normalization_verification.png')
+                    plt.savefig(norm_plot_file, dpi=300, bbox_inches='tight')
+                    print(f"Normalization verification plot saved to: {norm_plot_file}")
+                    plt.show()
                 else:
                     missing_cols = []
                     if 'oside' not in exp_df.columns:
@@ -377,7 +423,7 @@ Examples:
     n_samples = sampling_config.get('n_samples', 200)
     print(f"Number of samples from config: {n_samples}")
     
-    print(f"\nGenerating {n_samples} samples using Latin Hypercube Sampling...")
+    print(f"Generating {n_samples} samples using Latin Hypercube Sampling...")
     
     # Latin Hypercube Sampling
     lhs = LatinHypercubeSampling(distributions=distributions, nsamples=n_samples)
@@ -385,9 +431,6 @@ Examples:
     
     # Note: UQpy Lognormal distribution already returns values in the correct space
     # No exponentiation needed for lognormal parameters
-    
-    print("LHS samples (physical space):")
-    print(samples)
     
     # After generating LHS samples, augment with extreme boundary points
     # ------------------------------------------------------------------
@@ -409,23 +452,58 @@ Examples:
         """Augment base_samples with extreme points.
 
         For each parameter we create `n_per_face` samples at the low bound and
-        `n_per_face` at the high bound.  For diversity the remaining coordinates
-        are copied from random LHS samples rather than the global mean.
+        `n_per_face` at the high bound. For diversity, we generate new random
+        values for all other parameters from their respective distributions.
         """
         rng = np.random.default_rng(random_state)
-        aug = []
+        aug_samples = []
+        
+        # Create UQpy distributions for generating new random values
+        distributions = create_uqpy_distributions(p_defs)
+        
         for idx, p in enumerate(p_defs):
             low, high = _get_param_bounds(p)
             for _ in range(n_per_face):
-                template = base_samples[rng.integers(len(base_samples))].copy()
-                low_samp = template.copy();  low_samp[idx] = low
-                high_samp = template.copy(); high_samp[idx] = high
-                aug.extend([low_samp, high_samp])
-        return np.vstack([base_samples, np.array(aug)])
+                # Generate new random values for all parameters
+                new_sample = np.zeros(len(distributions))
+                for i, dist in enumerate(distributions):
+                    new_sample[i] = dist.rvs(1)[0]
+                
+                # Create low boundary sample
+                low_samp = new_sample.copy()
+                low_samp[idx] = low
+                
+                # Create high boundary sample  
+                high_samp = new_sample.copy()
+                high_samp[idx] = high
+                
+                print(f"DEBUG: low_samp shape: {low_samp.shape}, type: {type(low_samp)}")
+                print(f"DEBUG: high_samp shape: {high_samp.shape}, type: {type(high_samp)}")
+                
+                aug_samples.append(low_samp)
+                aug_samples.append(high_samp)
+        
+        # Convert to 2D array and stack with base samples
+        if aug_samples:
+            aug_array = np.array(aug_samples)
+            print(f"DEBUG: base_samples shape: {base_samples.shape}")
+            print(f"DEBUG: aug_array shape: {aug_array.shape}")
+            print(f"DEBUG: aug_samples length: {len(aug_samples)}")
+            print(f"DEBUG: first aug_sample shape: {aug_samples[0].shape if len(aug_samples) > 0 else 'N/A'}")
+            
+            # Ensure both arrays are 2D
+            if len(base_samples.shape) == 1:
+                base_samples = base_samples.reshape(1, -1)
+            if len(aug_array.shape) == 1:
+                aug_array = aug_array.reshape(1, -1)
+            
+            print(f"DEBUG: After reshape - base_samples shape: {base_samples.shape}")
+            print(f"DEBUG: After reshape - aug_array shape: {aug_array.shape}")
+            
+            return np.vstack([base_samples, aug_array])
+        else:
+            return base_samples
 
-    samples = _augment_with_boundaries(samples, param_defs, n_per_face=3, random_state=42)
-    print(f"Augmented samples with boundary points -> new total: {len(samples)}")
-    
     # Determine output paths - use distributions file paths, but allow command-line override
     if args.output_dir != 'outputs':  # If user specified a custom output directory
         # Override all paths to use the custom directory
@@ -435,7 +513,6 @@ Examples:
         fpca_training_file = f"{args.output_dir}/training_data_fpca.npz"
         distribution_plot_file = f"{args.output_dir}/parameter_distributions.png"
         correlation_plot_file = f"{args.output_dir}/parameter_correlations.png"
-        print(f"Using custom output directory: {args.output_dir}")
     else:
         # Use paths from distributions file
         samples_file = output_config.get('samples_file', 'outputs/initial_train_set.csv')
@@ -444,28 +521,27 @@ Examples:
         fpca_training_file = output_config.get('fpca_training_file', 'outputs/training_data_fpca.npz')
         distribution_plot_file = output_config.get('distribution_plot_file', 'outputs/parameter_distributions.png')
         correlation_plot_file = output_config.get('correlation_plot_file', 'outputs/parameter_correlations.png')
-        print(f"Using output paths from distributions file")
     
-    # Ensure output directory exists
-    import os
-    output_dir = os.path.dirname(samples_file)
-    os.makedirs(output_dir, exist_ok=True)
-    
-    header = ",".join([p["name"] for p in param_defs])
-    np.savetxt(samples_file, samples, delimiter=",", header=header, comments='')
-    print(f"Sample parameters saved to: {samples_file}")
-    
-    # Create parameter distribution plots
-    print("\n" + "="*60)
-    print("CREATING PARAMETER DISTRIBUTION PLOTS")
-    print("="*60)
-    plot_parameter_distributions(samples, param_defs, output_dir=os.path.dirname(distribution_plot_file))
-    
-    # Create parameter correlation plot
-    print("\n" + "="*60)
-    print("CREATING PARAMETER CORRELATION PLOT")
-    print("="*60)
-    plot_parameter_correlations(samples, param_defs, output_dir=os.path.dirname(correlation_plot_file))
+    # This block will be skipped if --rebuild-fpca-from is used
+    if not args.rebuild_fpca_from:
+        # Augment samples with boundary points (only when generating new samples)
+        print(f"DEBUG: samples shape before augmentation: {samples.shape}")
+        print(f"DEBUG: samples type: {type(samples)}")
+        samples = _augment_with_boundaries(samples, param_defs, n_per_face=3, random_state=42)
+        print(f"Augmented samples with boundary points -> new total: {len(samples)}")
+        
+        # Ensure output directory exists
+        import os
+        output_dir = os.path.dirname(samples_file)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        header = ",".join([p["name"] for p in param_defs])
+        np.savetxt(samples_file, samples, delimiter=",", header=header, comments='')
+        print(f"Sample parameters saved to: {samples_file}")
+        
+        # Create parameter distribution plots
+        plot_parameter_distributions(samples, param_defs, output_dir=os.path.dirname(distribution_plot_file))
+        plot_parameter_correlations(samples, param_defs, output_dir=os.path.dirname(correlation_plot_file))
     
     # This block will be skipped if --rebuild-fpca-from is used
     if not args.rebuild_fpca_from:
@@ -560,29 +636,15 @@ Examples:
     print("="*60)
     
     # Load and verify the saved data
-    print("\nVerifying saved data...")
     batch_data = load_batch_results(results_file)
-    
-    print(f"Loaded data keys: {list(batch_data.keys())}")
-    print(f"Oside curves shape: {batch_data['oside_curves'].shape}")
-    print(f"Parameters shape: {batch_data['parameters'].shape}")
-    print(f"Parameter names: {batch_data['parameter_names']}")
     
     # Count valid curves
     valid_curves = np.sum(~np.isnan(batch_data['oside_curves']).any(axis=1))
-    print(f"Valid oside curves: {valid_curves}")
-    
-    # Basic statistics
-    valid_data = batch_data['oside_curves'][~np.isnan(batch_data['oside_curves']).any(axis=1)]
-    if len(valid_data) > 0:
-        print(f"Oside curve statistics:")
-        print(f"  Mean max value: {np.mean(np.max(valid_data, axis=1)):.3f}")
-        print(f"  Mean min value: {np.mean(np.min(valid_data, axis=1)):.3f}")
-        print(f"  Mean range: {np.mean(np.max(valid_data, axis=1) - np.min(valid_data, axis=1)):.3f}")
+    print(f"Loaded {len(batch_data['oside_curves'])} curves, {valid_curves} valid")
     
     # Build FPCA model
     print("\nBuilding FPCA model...")
-    fpca_model = build_fpca_model(batch_data, results_file)
+    fpca_model = build_fpca_model(results_file)
     
     # Save FPCA model
     print("\nSaving FPCA model...")
@@ -590,22 +652,14 @@ Examples:
     
     # Recast training data to FPCA space
     print("\nRecasting training data to FPCA space...")
-    recast_training_data_to_fpca(batch_data, fpca_model, fpca_training_file)
+    recast_training_data_to_fpca(results_file, fpca_model, None, fpca_training_file)
     
     # Print summary
-    print("\n" + "="*60)
-    print("FPCA ANALYSIS SUMMARY")
-    print("="*60)
-    print(f"Number of components: {fpca_model['n_components']}")
-    print(f"Explained variance: {fpca_model['explained_variance']:.4f}")
-    print(f"Training data shape: {batch_data['parameters'].shape}")
-    print(f"FPCA scores shape: {fpca_model['training_scores'].shape}")
-    
-    # Print FPCA score statistics
-    print("\nFPCA Score Statistics:")
-    for i in range(fpca_model['n_components']):
-        scores = fpca_model['training_scores'][:, i]
-        print(f"PC{i+1}: mean={np.mean(scores):.4f}, std={np.std(scores):.4f}")
+    print(f"\nFPCA Analysis Summary:")
+    print(f"  Components: {fpca_model['n_components']}")
+    print(f"  Cumulative explained variance: {fpca_model['cumulative_variance'][-1]:.4f}")
+    print(f"  Training data shape: {batch_data['parameters'].shape}")
+    print(f"  FPCA scores shape: {fpca_model['training_scores'].shape}")
     
     print(f"\nTraining data generation completed successfully!")
     print(f"Results saved to: {results_file}")

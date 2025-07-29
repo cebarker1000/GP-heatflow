@@ -215,89 +215,76 @@ def plot_nuisance_influence_analysis(correlations, conditional_var_reduction, nu
     """
     Create visualizations for nuisance parameter influence analysis.
     """
-    # Create figure with subplots
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    # Create figure with subplots in a single row
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     
     # 1. Correlation heatmap
     corr_matrix = np.array([correlations[name] for name in nuisance_names])
-    im1 = axes[0, 0].imshow(corr_matrix, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
-    axes[0, 0].set_title('Correlation between Nuisance and k Parameters')
-    axes[0, 0].set_xticks(range(len(k_names)))
-    axes[0, 0].set_xticklabels(k_names, rotation=45)
-    axes[0, 0].set_yticks(range(len(nuisance_names)))
-    axes[0, 0].set_yticklabels(nuisance_names)
-    plt.colorbar(im1, ax=axes[0, 0], label='Correlation')
+    im1 = axes[0].imshow(corr_matrix, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
+    axes[0].set_title('Correlation between Nuisance and k Parameters')
+    axes[0].set_xticks(range(len(k_names)))
+    axes[0].set_xticklabels(k_names, rotation=45)
+    axes[0].set_yticks(range(len(nuisance_names)))
+    axes[0].set_yticklabels(nuisance_names)
+    plt.colorbar(im1, ax=axes[0], label='Correlation')
     
     # Add correlation values as text
     for i in range(len(nuisance_names)):
         for j in range(len(k_names)):
-            text = axes[0, 0].text(j, i, f'{corr_matrix[i, j]:.2f}',
-                                  ha="center", va="center", color="black", fontsize=8)
+            text = axes[0].text(j, i, f'{corr_matrix[i, j]:.2f}',
+                               ha="center", va="center", color="black", fontsize=8)
     
     # 2. Variance reduction heatmap
     var_reduction_matrix = np.array([conditional_var_reduction[name] for name in nuisance_names])
-    im2 = axes[0, 1].imshow(var_reduction_matrix, cmap='viridis', aspect='auto')
-    axes[0, 1].set_title('Variance Reduction (%) when Nuisance Parameter Fixed')
-    axes[0, 1].set_xticks(range(len(k_names)))
-    axes[0, 1].set_xticklabels(k_names, rotation=45)
-    axes[0, 1].set_yticks(range(len(nuisance_names)))
-    axes[0, 1].set_yticklabels(nuisance_names)
-    plt.colorbar(im2, ax=axes[0, 1], label='Variance Reduction (%)')
+    im2 = axes[1].imshow(var_reduction_matrix, cmap='viridis', aspect='auto')
+    axes[1].set_title('Variance Reduction (%) when Nuisance Parameter Fixed')
+    axes[1].set_xticks(range(len(k_names)))
+    axes[1].set_xticklabels(k_names, rotation=45)
+    axes[1].set_yticks(range(len(nuisance_names)))
+    axes[1].set_yticklabels(nuisance_names)
+    plt.colorbar(im2, ax=axes[1], label='Variance Reduction (%)')
     
     # Add variance reduction values as text
     for i in range(len(nuisance_names)):
         for j in range(len(k_names)):
-            text = axes[0, 1].text(j, i, f'{var_reduction_matrix[i, j]:.1f}%',
-                                  ha="center", va="center", color="white", fontsize=8)
+            text = axes[1].text(j, i, f'{var_reduction_matrix[i, j]:.1f}%',
+                               ha="center", va="center", color="white", fontsize=8)
     
-    # 3. Overall influence score (combining correlation and variance reduction)
-    # Normalize both metrics and combine them
-    corr_abs = np.abs(corr_matrix)
-    var_norm = var_reduction_matrix / 100.0  # Normalize to [0,1]
+    # 3. Correlation magnitude vs variance reduction scatter
+    corr_magnitudes = np.abs(corr_matrix).flatten()
+    var_reductions = var_reduction_matrix.flatten()
     
-    # Simple combination: average of normalized metrics
-    influence_score = (corr_abs + var_norm) / 2
-    
-    im3 = axes[1, 0].imshow(influence_score, cmap='plasma', aspect='auto')
-    axes[1, 0].set_title('Overall Influence Score (0-1)')
-    axes[1, 0].set_xticks(range(len(k_names)))
-    axes[1, 0].set_xticklabels(k_names, rotation=45)
-    axes[1, 0].set_yticks(range(len(nuisance_names)))
-    axes[1, 0].set_yticklabels(nuisance_names)
-    plt.colorbar(im3, ax=axes[1, 0], label='Influence Score')
-    
-    # Add influence scores as text
-    for i in range(len(nuisance_names)):
-        for j in range(len(k_names)):
-            text = axes[1, 0].text(j, i, f'{influence_score[i, j]:.2f}',
-                                  ha="center", va="center", color="white", fontsize=8)
-    
-    # 4. Bar plot of average influence scores
-    avg_influence = np.mean(influence_score, axis=1)
-    bars = axes[1, 1].bar(range(len(nuisance_names)), avg_influence, color='skyblue', alpha=0.7)
-    axes[1, 1].set_title('Average Influence Score by Nuisance Parameter')
-    axes[1, 1].set_xlabel('Nuisance Parameter')
-    axes[1, 1].set_ylabel('Average Influence Score')
-    axes[1, 1].set_xticks(range(len(nuisance_names)))
-    axes[1, 1].set_xticklabels(nuisance_names, rotation=45)
-    axes[1, 1].grid(True, alpha=0.3)
-    
-    # Add value labels on bars
-    for i, (bar, val) in enumerate(zip(bars, avg_influence)):
-        axes[1, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                        f'{val:.3f}', ha='center', va='bottom', fontsize=9)
+    scatter = axes[2].scatter(corr_magnitudes, var_reductions, 
+                             c=var_reductions, cmap='viridis', alpha=0.7, s=50)
+    axes[2].set_xlabel('|Correlation|')
+    axes[2].set_ylabel('Variance Reduction (%)')
+    axes[2].set_title('Correlation Magnitude vs Variance Reduction')
+    axes[2].grid(True, alpha=0.3)
+    plt.colorbar(scatter, ax=axes[2], label='Variance Reduction (%)')
     
     plt.tight_layout()
     plt.savefig("nuisance_parameter_influence.png", dpi=300, bbox_inches="tight")
     print("Nuisance parameter influence analysis saved to nuisance_parameter_influence.png")
     plt.show()
     
-    # Print summary of most influential parameters
-    print("\n3. SUMMARY OF MOST INFLUENTIAL NUISANCE PARAMETERS")
+    # Print summary of correlation and variance reduction
+    print("\n3. SUMMARY OF NUISANCE PARAMETER INFLUENCE")
     print("-" * 60)
-    sorted_indices = np.argsort(avg_influence)[::-1]  # Sort in descending order
+    print("Parameters ranked by average absolute correlation with k parameters:")
+    
+    # Calculate average absolute correlation for each nuisance parameter
+    avg_abs_corr = np.mean(np.abs(corr_matrix), axis=1)
+    sorted_indices = np.argsort(avg_abs_corr)[::-1]  # Sort in descending order
+    
     for i, idx in enumerate(sorted_indices):
-        print(f"{i+1}. {nuisance_names[idx]}: {avg_influence[idx]:.3f}")
+        print(f"{i+1}. {nuisance_names[idx]}: avg |corr| = {avg_abs_corr[idx]:.3f}")
+    
+    print("\nParameters ranked by average variance reduction:")
+    avg_var_reduction = np.mean(var_reduction_matrix, axis=1)
+    sorted_indices_var = np.argsort(avg_var_reduction)[::-1]  # Sort in descending order
+    
+    for i, idx in enumerate(sorted_indices_var):
+        print(f"{i+1}. {nuisance_names[idx]}: avg var reduction = {avg_var_reduction[idx]:.1f}%")
 
 def plot_posterior_vs_prior(samples_flat, param_names, param_defs):
     """
@@ -482,13 +469,23 @@ def plot_likelihood_values(samples_full, log_pdf_values, param_names):
     print(f"  Mean log-likelihood: {np.mean(log_pdf_values):.2f}")
     print(f"  Std log-likelihood: {np.std(log_pdf_values):.2f}")
 
-def load_mcmc_results():
+def load_mcmc_results(results_path="mcmc_results.npz"):
     """
     Load MCMC results from saved .npz file.
+    
+    Parameters:
+    -----------
+    results_path : str
+        Path to the .npz file containing MCMC results
+        
+    Returns:
+    --------
+    tuple
+        (samples_full, log_pdf_values) or (None, None) if file not found
     """
     try:
         # Load from saved .npz file
-        data = np.load("mcmc_results.npz")
+        data = np.load(results_path)
         samples_full = data['samples_full']
         log_pdf_values = data.get('log_pdf_values', None)
         
@@ -499,7 +496,7 @@ def load_mcmc_results():
         return samples_full, log_pdf_values
         
     except FileNotFoundError:
-        print("Could not find mcmc_results.npz. Make sure uqpy_MCMC.py has been run.")
+        print(f"Could not find {results_path}. Make sure uqpy_MCMC.py has been run.")
         return None, None
 
 def create_corner_plot(data, labels, title, filename):
@@ -675,16 +672,27 @@ def plot_trace_plots(samples_full, param_names, n_walkers=24):
 
 def main():
     """Main function to load and plot MCMC results."""
-    print("Loading MCMC results...")
+    import argparse
     
-    samples_full, log_pdf_values = load_mcmc_results()
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Plot MCMC results from saved outputs')
+    parser.add_argument('--results', '-r', type=str, default='mcmc_results.npz',
+                       help='Path to the MCMC results .npz file (default: mcmc_results.npz)')
+    parser.add_argument('--config', '-c', type=str, default='configs/distributions.yaml',
+                       help='Path to the distributions config file (default: configs/distributions.yaml)')
+    
+    args = parser.parse_args()
+    
+    print(f"Loading MCMC results from: {args.results}")
+    
+    samples_full, log_pdf_values = load_mcmc_results(args.results)
     
     if samples_full is None:
         print("No MCMC results found. Please run uqpy_MCMC.py first.")
         return
     
     # Get parameter names from config
-    param_defs = get_param_defs_from_config(config_path="configs/distributions.yaml")
+    param_defs = get_param_defs_from_config(config_path=args.config)
     param_names = [param_def['name'] for param_def in param_defs]
     
     print(f"Parameter names: {param_names}")
